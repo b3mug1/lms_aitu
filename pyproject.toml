@@ -26,9 +26,13 @@ dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
 ]
+sso = [
+    "playwright>=1.49.0",
+]
 
 [project.scripts]
 moodle-notifier = "app.main:run"
+moodle-notifier-sso-login = "app.moodle_sso_login:run"
 
 [tool.vercel]
 entrypoint = "app.vercel_api:app"

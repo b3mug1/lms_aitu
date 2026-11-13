@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urljoin, urlparse
 from zoneinfo import ZoneInfo
@@ -397,6 +398,24 @@ class MoodleWebClient:
     async def _ensure_authenticated_dashboard(self) -> tuple[str, str | None]:
         resp = await self._get("/my/")
         if is_login_page(resp.text, str(resp.url), self._base_url):
+            if self._settings.moodle_sso_profile_dir:
+                try:
+                    await self._reauthenticate_with_sso_profile()
+                except Exception as exc:
+                    logger.warning(
+                        "Automatic Microsoft SSO refresh failed (%s)", type(exc).__name__
+                    )
+                    if not (
+                        self._settings.moodle_username and self._settings.moodle_password
+                    ):
+                        raise LMSAuthError(
+                            "Moodle session expired. Run the one-time Microsoft SSO setup "
+                            "with `python -m app.moodle_sso_login`, then restart the bot."
+                        ) from exc
+                else:
+                    resp = await self._get("/my/")
+
+        if is_login_page(resp.text, str(resp.url), self._base_url):
             await self._login_via_form()
             resp = await self._get("/my/")
             if is_login_page(resp.text, str(resp.url), self._base_url):
@@ -404,6 +423,107 @@ class MoodleWebClient:
 
         sesskey = extract_sesskey(resp.text)
         return resp.text, sesskey
+
+    async def _reauthenticate_with_sso_profile(self) -> None:
+        """Use a persistent browser profile to renew Moodle's Microsoft SSO session."""
+        try:
+            from playwright.async_api import Error as PlaywrightError
+            from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+            from playwright.async_api import async_playwright
+        except ImportError as exc:
+            raise LMSAuthError(
+                "Playwright is not installed; install the project's optional sso dependencies"
+            ) from exc
+
+        profile_dir = Path(self._settings.moodle_sso_profile_dir or "").expanduser()
+        profile_dir.mkdir(parents=True, exist_ok=True)
+
+        async with async_playwright() as playwright:
+            context = await playwright.chromium.launch_persistent_context(
+                str(profile_dir.resolve()),
+                headless=True,
+            )
+            try:
+                page = context.pages[0] if context.pages else await context.new_page()
+                try:
+                    await page.goto(
+                        f"{self._base_url}/my/",
+                        wait_until="domcontentloaded",
+                        timeout=int(self._settings.request_timeout_seconds * 1000),
+                    )
+                except PlaywrightTimeoutError:
+                    # SSO redirects may finish after the initial navigation timeout.
+                    pass
+
+                try:
+                    page_html = await page.content()
+                except PlaywrightError:
+                    page_html = ""
+                if is_login_page(page_html, page.url, self._base_url):
+                    current_host = urlparse(page.url).hostname
+                    moodle_host = urlparse(self._base_url).hostname
+                    if current_host and current_host.lower() == (moodle_host or "").lower():
+                        oidc_link = page.locator('a[href*="/auth/oidc"]')
+                        oidc_button = page.get_by_role(
+                            "button", name=re.compile("OpenID Connect", re.IGNORECASE)
+                        )
+                        oidc_label = page.get_by_role(
+                            "link", name=re.compile("OpenID Connect", re.IGNORECASE)
+                        )
+                        if await oidc_link.count():
+                            await oidc_link.first.click(timeout=5_000)
+                        elif await oidc_button.count():
+                            await oidc_button.first.click(timeout=5_000)
+                        elif await oidc_label.count():
+                            await oidc_label.first.click(timeout=5_000)
+                        else:
+                            await page.goto(
+                                f"{self._base_url}/auth/oidc/",
+                                wait_until="domcontentloaded",
+                                timeout=int(self._settings.request_timeout_seconds * 1000),
+                            )
+
+                deadline = asyncio.get_running_loop().time() + 45
+                authenticated = False
+                while asyncio.get_running_loop().time() < deadline:
+                    try:
+                        current_url = page.url
+                        current_host = urlparse(current_url).hostname
+                        moodle_host = urlparse(self._base_url).hostname
+                        if (
+                            current_host
+                            and current_host.lower() == (moodle_host or "").lower()
+                            and not is_login_page(
+                                await page.content(), current_url, self._base_url
+                            )
+                        ):
+                            authenticated = True
+                            break
+                    except PlaywrightError:
+                        # The page may be in the middle of an OIDC redirect.
+                        pass
+                    await page.wait_for_timeout(500)
+
+                if not authenticated:
+                    raise LMSAuthError(
+                        "Saved Microsoft SSO profile needs interactive sign-in"
+                    )
+
+                moodle_host = urlparse(self._base_url).hostname or ""
+                for cookie in await context.cookies():
+                    cookie_domain = str(cookie.get("domain") or "").lstrip(".").lower()
+                    if cookie_domain != moodle_host.lower() and not moodle_host.lower().endswith(
+                        f".{cookie_domain}"
+                    ):
+                        continue
+                    self._client.cookies.set(
+                        str(cookie["name"]),
+                        str(cookie["value"]),
+                        domain=str(cookie.get("domain") or moodle_host),
+                        path=str(cookie.get("path") or "/"),
+                    )
+            finally:
+                await context.close()
 
     async def _call_ajax(self, sesskey: str, methodname: str, args: dict[str, Any]) -> Any | None:
         url = f"/lib/ajax/service.php?sesskey={sesskey}&info={methodname}"

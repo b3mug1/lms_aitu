@@ -424,11 +424,18 @@ def format_sync_status(state: SyncStateModel | None, tz: ZoneInfo) -> str:
 
 def format_sync_error(error: str | None) -> str:
     """Turn a known Moodle authentication failure into an actionable bot message."""
+    if error and "one-time Microsoft SSO setup" in error:
+        return (
+            "Сессия Moodle истекла, автоматический вход через Microsoft не завершился. "
+            "На компьютере бота повторите однократный вход командой "
+            "<code>python -m app.moodle_sso_login</code>. "
+            "Или обновите cookie владельца через <code>/setcookie</code>."
+        )
     if error and "Moodle session expired and no MOODLE_USERNAME / MOODLE_PASSWORD configured" in error:
         return (
-            "Сессия Moodle истекла. Войдите в Moodle через браузер и отправьте "
-            "этому боту в личном чате <code>/setcookie</code> без значения. "
-            "Бот покажет, как обновить сессию."
+            "Сессия Moodle истекла. Для ручного обновления войдите в Moodle через браузер "
+            "и отправьте этому боту в личном чате <code>/setcookie</code> без значения. "
+            "Для автоматического входа через Microsoft настройте SSO-профиль на компьютере бота."
         )
     return f"<code>{_esc((error or 'Неизвестная ошибка')[:300])}</code>"
 

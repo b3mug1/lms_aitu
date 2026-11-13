@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     moodle_password: SecretStr | None = None
     moodle_service: str = "moodle_mobile_app"
     moodle_session_cookie: SecretStr | None = None
+    moodle_sso_profile_dir: str | None = None
 
     # Scheduler & Notifications
     poll_interval_seconds: int = Field(default=300, ge=30)

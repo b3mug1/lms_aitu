@@ -12,7 +12,7 @@
 На сервере `lms.astanait.edu.kz`:
 - внешние эндпоинты `/login/token.php` и `/webservice/rest/server.php` закрыты `403 Forbidden`, поэтому сервис работает через **веб-сессию (`MoodleWebClient`: внутренний AJAX + HTML-парсинг через `BeautifulSoup4`)**;
 - поддерживаются два способа входа:
-  1. **Через Microsoft / OpenID Connect (`/auth/oidc/`)** — используйте `MOODLE_AUTH_MODE=cookie` и вставьте значение cookie `MoodleSession` в `MOODLE_SESSION_COOKIE` (или обновляйте его прямо в Telegram-боте командой `/setcookie <значение>`). Таймаут неактивной сессии на сайте — 25 минут (`sessiontimeout: 1500`), поэтому опрос каждые 5 минут (`POLL_INTERVAL_SECONDS=300`) автоматически поддерживает сессию живой пока сервис запущен.
+  1. **Через Microsoft / OpenID Connect (`/auth/oidc/`)** — используйте `MOODLE_AUTH_MODE=cookie` и вставьте значение cookie `MoodleSession` в `MOODLE_SESSION_COOKIE` (или обновляйте его прямо в Telegram-боте командой `/setcookie <значение>`). Опрос каждые 5 минут (`POLL_INTERVAL_SECONDS=300`) поддерживает активную сессию, пока бот запущен. Для автоматического повторного входа после истечения Moodle-cookie настройте отдельный профиль браузера по инструкции ниже.
   2. **Через логин и пароль Moodle** (если для вашей учётной записи включён локальный вход на `/login/index.php`) — используйте `MOODLE_AUTH_MODE=web` (или `auto`) с `MOODLE_USERNAME` и `MOODLE_PASSWORD`.
 
 ## Быстрый старт (Windows PowerShell)
@@ -35,6 +35,24 @@
    ```powershell
    .\.venv\Scripts\python.exe -m app.main --once
    ```
+
+### Автоматическое восстановление Microsoft SSO
+
+Бот может повторно пройти OpenID Connect, используя отдельный сохранённый профиль браузера. Этот профиль хранит SSO cookies и считается секретом.
+
+1. Установите Playwright и Chromium:
+   ```powershell
+   .\.venv\Scripts\python.exe -m pip install -e ".[sso]"
+   .\.venv\Scripts\python.exe -m playwright install chromium
+   ```
+2. Убедитесь, что в `.env` задано `MOODLE_SSO_PROFILE_DIR=data/moodle_sso_profile`.
+3. Выполните однократный вход:
+   ```powershell
+   .\.venv\Scripts\python.exe -m app.moodle_sso_login
+   ```
+4. В открывшемся браузере войдите в Moodle через **OpenID Connect / Microsoft**, затем нажмите Enter в окне PowerShell и перезапустите бота.
+
+После этого при истечении Moodle-cookie бот попробует обновить сессию через сохранённый Microsoft профиль. Если Microsoft потребует интерактивный вход или MFA, запустите команду входа ещё раз. Профиль находится в `data/` и исключён из Git.
 
 ## Команды Telegram-бота
 
