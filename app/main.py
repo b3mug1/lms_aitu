@@ -64,6 +64,7 @@ async def async_main(once: bool = False) -> int:
         dp = Dispatcher()
         dp.include_router(create_bot_router(settings, session_factory, sync_service))
         await bot.set_my_commands(BOT_COMMANDS)
+        await bot.delete_webhook(drop_pending_updates=False)
 
         stop_event = asyncio.Event()
         poller_task = asyncio.create_task(

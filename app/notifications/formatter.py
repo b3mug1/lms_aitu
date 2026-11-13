@@ -217,25 +217,44 @@ def format_deadlines_list(
 ) -> str:
     if not assignments:
         if include_submitted:
-            return "На ближайший период нет заданий со сроком сдачи."
-        return "На ближайший период нет несданных заданий со сроком сдачи."
+            return "🗓 На ближайший период нет заданий со сроком сдачи."
+        return "🗓 На ближайший период нет несданных заданий со сроком сдачи."
 
-    header = "Ближайшие сроки сдачи (включая сданные)" if include_submitted else "Ближайшие сроки сдачи"
-    lines = [f"<b>{header}</b>", ""]
-    for idx, item in enumerate(assignments, start=1):
+    header = (
+        "Ближайшие сроки сдачи · включая сданные"
+        if include_submitted
+        else "Ближайшие сроки сдачи"
+    )
+    lines = [f"🗓 <b>{header} · {len(assignments)}</b>", ""]
+    for item in assignments:
         due_dt = as_utc(item.due_at)
-        rem = format_remaining_time(due_dt, now) if due_dt else ""
-        status_label = " [сдано]" if item.submitted else ""
         title_html = (
             f'<a href="{_esc(item.url)}">{_esc(item.title)}</a>'
             if item.url
             else _esc(item.title)
         )
-        lines.append(
-            f"{idx}. <b>{title_html}</b>{status_label}\n"
-            f"   {_esc(item.course_name)}\n"
-            f"   Срок сдачи: {format_local_dt(due_dt, tz)} ({rem})"
-        )
+        if item.submitted:
+            status_icon = "✅"
+            status = "сдано"
+        elif due_dt is None:
+            status_icon = "⚪"
+            status = "срок не указан"
+        elif due_dt <= now:
+            status_icon = "🔴"
+            status = "срок истёк"
+        elif (due_dt - now).total_seconds() <= 24 * 60 * 60:
+            status_icon = "🟠"
+            status = format_remaining_time(due_dt, now)
+        else:
+            status_icon = "📅"
+            status = format_remaining_time(due_dt, now)
+
+        lines.append(f"{status_icon} <b>{title_html}</b>")
+        lines.append(f"   {_esc(item.course_name)}")
+        if due_dt is not None:
+            lines.append(f"   ⏰ {format_local_dt(due_dt, tz)} · {status}")
+        else:
+            lines.append(f"   {status}")
     return "\n".join(lines)
 
 
@@ -287,12 +306,17 @@ def format_course_details(
     now: datetime,
 ) -> str:
     """Format interactive course card showing register totals, grades, and assignments."""
+    course_name, separator, teacher_name = course.name.partition("|")
+    course_name = course_name.strip()
+    teacher_name = teacher_name.strip()
     course_title = (
-        f'<a href="{_esc(course.url)}">{_esc(course.name)}</a>'
+        f'<a href="{_esc(course.url)}">{_esc(course_name)}</a>'
         if course.url
-        else _esc(course.name)
+        else _esc(course_name)
     )
-    lines = [f"<b>{course_title}</b>"]
+    lines = [f"📚 <b>{course_title}</b>"]
+    if separator and teacher_name:
+        lines.append(f"👤 <i>{_esc(teacher_name)}</i>")
 
     register_grades = [
         g
@@ -303,24 +327,24 @@ def format_course_details(
 
     if register_grades:
         lines.append("")
-        lines.append("<b>Регистр:</b>")
+        lines.append(f"📊 <b>Регистр · {len(register_grades)}</b>")
         for g in register_grades:
-            lines.append(f"• {_esc(g.item_name)}: <b>{_format_grade_score(g)}</b>")
+            lines.append(f"  • {_esc(g.item_name)} — <b>{_format_grade_score(g)}</b>")
 
     lines.append("")
     if activity_grades:
-        lines.append(f"<b>Оценки ({len(activity_grades)}):</b>")
+        lines.append(f"🎓 <b>Оценки · {len(activity_grades)}</b>")
         for g in activity_grades:
             name_html = (
                 f'<a href="{_esc(g.url)}">{_esc(g.item_name)}</a>'
                 if g.url
                 else _esc(g.item_name)
             )
-            lines.append(f"• {name_html} — <b>{_format_grade_score(g)}</b>")
+            lines.append(f"  • {name_html} — <b>{_format_grade_score(g)}</b>")
             if g.feedback:
-                lines.append(f"  Комментарий: <i>{_esc(g.feedback)}</i>")
+                lines.append(f"    💬 <i>{_esc(g.feedback)}</i>")
     else:
-        lines.append("<b>Оценки:</b> пока нет выставленных оценок")
+        lines.append("🎓 <b>Оценки</b> · пока нет выставленных оценок")
 
     lines.append("")
     if assignments:
@@ -336,7 +360,7 @@ def format_course_details(
             return (2, -due.timestamp())
 
         sorted_assigns = sorted(assignments, key=_sort_key)
-        lines.append(f"<b>Задания ({len(sorted_assigns)}):</b>")
+        lines.append(f"🗓 <b>Задания · {len(sorted_assigns)}</b>")
         for item in sorted_assigns:
             due = as_utc(item.due_at)
             title_html = (
@@ -345,19 +369,21 @@ def format_course_details(
                 else _esc(item.title)
             )
             if due is None:
-                lines.append(f"• {title_html} — без срока сдачи")
+                lines.append(f"  ⚪ {title_html} · срок не указан")
             elif item.submitted:
-                lines.append(f"• {title_html} — сдано ({format_local_dt(due, tz)})")
+                lines.append(f"  ✅ {title_html} · сдано · {format_local_dt(due, tz)}")
             elif due >= now:
+                status_icon = "🟠" if (due - now).total_seconds() <= 24 * 60 * 60 else "📅"
                 lines.append(
-                    f"• {title_html} — {format_local_dt(due, tz)} ({format_remaining_time(due, now)})"
+                    f"  {status_icon} {title_html} · {format_local_dt(due, tz)}"
+                    f" · {format_remaining_time(due, now)}"
                 )
             else:
                 lines.append(
-                    f"• {title_html} — {format_local_dt(due, tz)} (срок истёк)"
+                    f"  🔴 {title_html} · {format_local_dt(due, tz)} · срок истёк"
                 )
     else:
-        lines.append("<b>Задания:</b> не найдены")
+        lines.append("🗓 <b>Задания</b> · не найдены")
 
     return "\n".join(lines)
 

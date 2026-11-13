@@ -56,15 +56,14 @@
 .\.venv\Scripts\pytest.exe -v
 ```
 
-## Vercel deployment
+## Continuous SQLite run on Windows
 
-Vercel runs the FastAPI Telegram webhook in `app/vercel_api.py`. A free external scheduler calls `/api/cron` every five minutes so the Moodle session stays active and updates are checked regularly. The local polling process in `app/main.py` remains available for non-Vercel hosting.
+The local process uses the SQLite database in `data/lms_notifier.db` and polls Moodle according to `POLL_INTERVAL_SECONDS` (300 seconds by default). Start it with:
 
-1. Provision a persistent PostgreSQL database. Set `DATABASE_URL` to a SQLAlchemy async URL starting with `postgresql+asyncpg://`. SQLite files are not persistent on Vercel. The application creates its current tables on first use. To preserve the local history and reminder deduplication, set `DATABASE_URL` in your local shell and run `python -m scripts.migrate_sqlite_to_postgres` before the first Vercel request. The script refuses a non-empty target database.
-2. In the Vercel project, set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `MOODLE_BASE_URL`, the applicable Moodle credentials and `MOODLE_AUTH_MODE`, `DATABASE_URL`, `TELEGRAM_WEBHOOK_SECRET`, and `CRON_SECRET` as environment variables. Generate independent random values for the two secrets. Keep `.env` local; `.vercelignore` excludes it from deployment.
-3. Deploy the repository with `vercel --prod`. The project uses the Python entrypoint from `pyproject.toml`; scheduling is configured separately in the external scheduler.
-4. Set `TELEGRAM_WEBHOOK_SECRET` to the same value in your local `.env`, then register the production webhook with `python -m app.webhook_setup https://YOUR-PROJECT.vercel.app`. The script checks Telegram's webhook URL and updates bot commands.
-5. In cron-job.org, create a GET job for `https://YOUR-PROJECT.vercel.app/api/cron`, set the schedule to every five minutes (`*/5 * * * *`), and add this request header: `Authorization: Bearer <CRON_SECRET>`. Replace the placeholder with the exact `CRON_SECRET` configured in Vercel Production. Keep the secret in the header, not in the URL.
-6. Check cron-job.org's execution history for HTTP 200 responses with `"ok": true`, then send `/start` to the bot. The endpoint returns 403 for a missing or incorrect authorization header and 503 if `CRON_SECRET` is not configured. Do not run the local polling process against the same bot token while the webhook is active.
+```powershell
+.\.venv\Scripts\python.exe -m app.main
+```
 
-`POLL_INTERVAL_SECONDS` applies only to the local process. On Vercel, the external scheduler determines check frequency. A short-lived Moodle SSO cookie may expire if checks do not run every five minutes.
+Polling removes any Telegram webhook without dropping queued updates. Do not run the local poller and the Vercel webhook against the same bot token at the same time. To keep the bot available, Windows must remain powered on, awake, and connected to the internet. Configure the command in Windows Task Scheduler to start at user logon.
+
+Vercel's serverless functions require persistent PostgreSQL. Its local filesystem is not suitable for this SQLite database; use the local poller or another host with persistent disk when keeping SQLite.
