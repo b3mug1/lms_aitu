@@ -4,7 +4,7 @@ import html
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app.lms.base import AssignmentDTO, GradeDTO, LMSSnapshot
+from app.lms.base import AssignmentDTO, CourseDTO, GradeDTO, LMSSnapshot
 from app.storage.models import AssignmentModel, CourseModel, GradeModel, SyncStateModel, as_utc
 
 _MODULE_LABELS = {
@@ -210,7 +210,7 @@ def format_grade_notification(
 
 
 def format_deadlines_list(
-    assignments: list[AssignmentModel],
+    assignments: list[AssignmentModel | AssignmentDTO],
     tz: ZoneInfo,
     now: datetime,
     include_submitted: bool = False,
@@ -267,14 +267,14 @@ def _format_grade_score(item: GradeModel | GradeDTO) -> str:
     return score
 
 
-def format_grades_list(grades: list[GradeModel], tz: ZoneInfo) -> str:
+def format_grades_list(grades: list[GradeModel | GradeDTO], tz: ZoneInfo) -> str:
     if not grades:
         return (
             "Подтверждённых оценок пока нет. Нулевые записи без даты оценки "
             "или комментария можно посмотреть в разделе «Предметы»."
         )
 
-    by_course: dict[str, list[GradeModel]] = {}
+    by_course: dict[str, list[GradeModel | GradeDTO]] = {}
     for item in grades:
         by_course.setdefault(item.course_name or "Без названия предмета", []).append(item)
 
@@ -299,9 +299,9 @@ def format_grades_list(grades: list[GradeModel], tz: ZoneInfo) -> str:
 
 
 def format_course_details(
-    course: CourseModel,
-    assignments: list[AssignmentModel],
-    grades: list[GradeModel],
+    course: CourseModel | CourseDTO,
+    assignments: list[AssignmentModel | AssignmentDTO],
+    grades: list[GradeModel | GradeDTO],
     tz: ZoneInfo,
     now: datetime,
 ) -> str:
@@ -349,7 +349,7 @@ def format_course_details(
     lines.append("")
     if assignments:
         # Sort: upcoming unsubmitted first, then future submitted, then past/no-deadline
-        def _sort_key(item: AssignmentModel) -> tuple[int, float]:
+        def _sort_key(item: AssignmentModel | AssignmentDTO) -> tuple[int, float]:
             due = as_utc(item.due_at)
             if due is None:
                 return (3, 0.0)

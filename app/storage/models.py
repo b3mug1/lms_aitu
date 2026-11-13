@@ -6,6 +6,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Float,
+    BigInteger,
     Integer,
     String,
     Text,
@@ -124,3 +125,15 @@ class SyncStateModel(Base):
     error_alert_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     session_cookie: Mapped[str | None] = mapped_column(Text, nullable=True)
     env_cookie_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class MoodleUserAccountModel(Base):
+    """Encrypted Moodle session associated with one private Telegram account."""
+
+    __tablename__ = "moodle_user_accounts"
+
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    encrypted_cookie: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )

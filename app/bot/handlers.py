@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import escape
 import re
 
@@ -20,7 +20,20 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
-from app.lms.base import LMSAuthError, LMSConnectionError, LMSError
+from app.core.user_sessions import (
+    UserSessionError,
+    delete_user_account,
+    load_user_cookie,
+    save_user_cookie,
+    user_account_exists,
+)
+from app.lms.base import (
+    CourseDTO,
+    LMSAuthError,
+    LMSConnectionError,
+    LMSError,
+    LMSSnapshot,
+)
 from app.lms.client import AutoMoodleClient
 from app.notifications.formatter import (
     format_course_details,
@@ -43,6 +56,7 @@ BOT_COMMANDS = [
     BotCommand(command="help", description="Как пользоваться ботом"),
     BotCommand(command="setcookie", description="Обновить MoodleSession cookie (SSO)"),
     BotCommand(command="connect", description="Подключить личную сессию Moodle"),
+    BotCommand(command="disconnect", description="Отключить личный Moodle аккаунт"),
 ]
 
 MENU_DEADLINES = "Сроки сдачи"
@@ -72,7 +86,7 @@ async def _reply_chunked(
         await message.answer(chunk, reply_markup=markup)
 
 
-def _build_courses_keyboard(courses: list[CourseModel]) -> InlineKeyboardMarkup:
+def _build_courses_keyboard(courses: list[CourseDTO | CourseModel]) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
@@ -122,16 +136,107 @@ def create_bot_router(
         await callback.answer("Доступ ограничен.", show_alert=True)
         return False
 
+    async def _fetch_snapshot(cookie: str) -> LMSSnapshot:
+        user_settings = settings.model_copy(
+            update={
+                "moodle_auth_mode": "cookie",
+                "moodle_token": None,
+                "moodle_username": None,
+                "moodle_password": None,
+                "moodle_session_cookie": SecretStr(cookie),
+            }
+        )
+        client = AutoMoodleClient(user_settings)
+        try:
+            return await client.fetch_snapshot()
+        finally:
+            await client.close()
+
+    async def _personal_snapshot(message: Message) -> tuple[bool, LMSSnapshot | None]:
+        """Load only the calling private user's Moodle account and live data."""
+        is_owner = message.chat.id == settings.telegram_chat_id
+        if message.chat.type != "private" or message.from_user is None:
+            await message.answer("Используйте бота в личном чате.")
+            return True, None
+        if settings.moodle_cookie_encryption_key is None:
+            if is_owner:
+                return False, None
+            await message.answer("Личные Moodle-аккаунты пока не настроены администратором бота.")
+            return True, None
+        try:
+            cookie = await load_user_cookie(settings, session_factory, message.from_user.id)
+            if cookie is None:
+                if is_owner:
+                    return False, None
+                await message.answer(
+                    "Сначала подключите Moodle: <code>/connect MoodleSession=значение</code>."
+                )
+                return True, None
+            return True, await _fetch_snapshot(cookie)
+        except LMSAuthError:
+            await message.answer(
+                "Сессия Moodle истекла. Отправьте новую cookie командой "
+                "<code>/connect MoodleSession=значение</code>."
+            )
+        except UserSessionError:
+            await message.answer(
+                "Не удалось расшифровать сохранённую сессию. Отправьте cookie повторно через /connect."
+            )
+        except LMSError:
+            await message.answer("Не удалось получить данные Moodle. Проверьте сессию и попробуйте позже.")
+        except Exception:
+            await message.answer("Не удалось получить данные Moodle. Попробуйте позже.")
+        return True, None
+
+    async def _personal_callback_snapshot(
+        callback: CallbackQuery,
+    ) -> tuple[bool, LMSSnapshot | None]:
+        msg = callback.message
+        if msg is None:
+            return False, None
+        if msg.chat.type != "private":
+            await callback.answer("Откройте бота в личном чате.", show_alert=True)
+            return True, None
+        if settings.moodle_cookie_encryption_key is None:
+            if msg.chat.id == settings.telegram_chat_id:
+                return False, None
+            await callback.answer("Личные аккаунты не настроены.", show_alert=True)
+            return True, None
+        try:
+            cookie = await load_user_cookie(settings, session_factory, callback.from_user.id)
+            if cookie is None:
+                if msg.chat.id == settings.telegram_chat_id:
+                    return False, None
+                await callback.answer("Сначала подключите Moodle через /connect.", show_alert=True)
+                return True, None
+            return True, await _fetch_snapshot(cookie)
+        except LMSAuthError:
+            await callback.answer("Сессия истекла. Подключите новую через /connect.", show_alert=True)
+        except Exception:
+            await callback.answer("Не удалось получить данные Moodle.", show_alert=True)
+        return True, None
+
     @router.message(Command("start", "help"))
     @router.message(F.text == MENU_HELP)
     async def cmd_help(message: Message) -> None:
         if message.chat.type == "private" and message.chat.id != settings.telegram_chat_id:
+            connected = bool(
+                message.from_user
+                and await user_account_exists(session_factory, message.from_user.id)
+            )
+            if connected:
+                await message.answer(
+                    "Ваш Moodle подключён. Используйте кнопки меню или команды "
+                    "<code>/courses</code>, <code>/grades</code>, <code>/deadlines</code>.\n"
+                    "Cookie хранится в зашифрованном виде. Для выхода: <code>/disconnect</code>.",
+                    reply_markup=MAIN_MENU,
+                )
+                return
             await message.answer(
                 "Чтобы подключить свой Moodle, отправьте в личном чате команду:\n"
                 "<code>/connect MoodleSession=ваш_cookie</code>\n\n"
-                "Cookie проверяется сразу и не сохраняется ботом. После подключения "
-                "я покажу имя профиля и список курсов. Если Telegram не удалит сообщение "
-                "с cookie, удалите его вручную. Никогда не отправляйте cookie в групповой чат."
+                "Cookie проверяется сразу и сохраняется в зашифрованном виде, чтобы "
+                "вы могли пользоваться командами бота. Отправляйте её только в личном чате."
             )
             return
         if not await _is_authorized_message(message):
@@ -168,25 +273,24 @@ def create_bot_router(
                 "<code>/connect MoodleSession=значение</code>"
             )
             return
-
+        if message.from_user is None:
+            await message.answer("Не удалось определить Telegram-пользователя.")
+            return
+        secret_message_deleted = True
         try:
             await message.delete()
         except (TelegramBadRequest, TelegramForbiddenError):
-            pass
+            secret_message_deleted = False
+        if settings.moodle_cookie_encryption_key is None:
+            await message.answer(
+                "Подключение личных аккаунтов не настроено. Администратору нужно задать "
+                "MOODLE_COOKIE_ENCRYPTION_KEY."
+            )
+            return
 
         await message.answer("Проверяю сессию Moodle и загружаю ваши курсы...")
-        user_settings = settings.model_copy(
-            update={
-                "moodle_auth_mode": "cookie",
-                "moodle_token": None,
-                "moodle_username": None,
-                "moodle_password": None,
-                "moodle_session_cookie": SecretStr(cookie_value),
-            }
-        )
-        client = AutoMoodleClient(user_settings)
         try:
-            snapshot = await client.fetch_snapshot()
+            snapshot = await _fetch_snapshot(cookie_value)
         except LMSAuthError:
             await message.answer(
                 "Не удалось войти в Moodle: cookie неверна или уже истекла. "
@@ -202,8 +306,13 @@ def create_bot_router(
         except Exception:
             await message.answer("Не удалось завершить подключение к Moodle. Попробуйте позже.")
             return
-        finally:
-            await client.close()
+        try:
+            await save_user_cookie(
+                settings, session_factory, message.from_user.id, cookie_value
+            )
+        except UserSessionError:
+            await message.answer("Не удалось безопасно сохранить сессию Moodle.")
+            return
 
         lines = ["<b>Подключение к Moodle выполнено</b>"]
         if snapshot.user_fullname:
@@ -218,11 +327,43 @@ def create_bot_router(
             )
         else:
             lines.append("Moodle не вернул список курсов для этой сессии.")
+        lines.append("\nТеперь доступны команды /courses, /grades и /deadlines.")
+        if not secret_message_deleted:
+            lines.append("Не удалось удалить исходное сообщение с cookie; удалите его вручную.")
         await _reply_chunked(message, "\n".join(lines))
+
+    @router.message(Command("disconnect"))
+    async def cmd_disconnect(message: Message) -> None:
+        if message.chat.type != "private" or message.from_user is None:
+            await message.answer("Отключить личный аккаунт можно только в личном чате с ботом.")
+            return
+        removed = await delete_user_account(session_factory, message.from_user.id)
+        await message.answer(
+            "Личная сессия Moodle удалена из бота."
+            if removed
+            else "У вас нет подключённой сессии Moodle."
+        )
 
     @router.message(Command("check"))
     @router.message(F.text == MENU_CHECK)
     async def cmd_check(message: Message) -> None:
+        personal, snapshot = await _personal_snapshot(message)
+        if personal:
+            if snapshot is None:
+                return
+            upcoming = sum(
+                1 for item in snapshot.assignments
+                if item.due_at and item.due_at > datetime.now(timezone.utc)
+                and not (item.submitted and settings.skip_submitted_deadlines)
+            )
+            await message.answer(
+                f"<b>Moodle обновлён</b>\n"
+                f"Профиль: {escape(snapshot.user_fullname) or 'не определён'}\n"
+                f"Курсов: {len(snapshot.courses)} · оценок: {len(snapshot.grades)}\n"
+                f"Предстоящих дедлайнов: {upcoming}",
+                reply_markup=MAIN_MENU,
+            )
+            return
         if not await _is_authorized_message(message):
             return
         await message.answer("Проверяю Moodle...")
@@ -250,6 +391,23 @@ def create_bot_router(
 
     @router.message(Command("deadlines"))
     async def cmd_deadlines(message: Message, command: CommandObject) -> None:
+        personal, snapshot = await _personal_snapshot(message)
+        if personal:
+            if snapshot is None:
+                return
+            include_submitted = bool(command.args and command.args.strip().lower() == "all")
+            now = datetime.now(timezone.utc)
+            cutoff = now + timedelta(days=settings.lookahead_days)
+            assignments = [
+                item for item in snapshot.assignments
+                if (include_submitted or not (item.submitted and settings.skip_submitted_deadlines))
+                and (item.due_at is None or now <= item.due_at <= cutoff)
+            ]
+            await _reply_chunked(
+                message,
+                format_deadlines_list(assignments, settings.tz_info, now, include_submitted),
+            )
+            return
         if not await _is_authorized_message(message):
             return
         include_submitted = bool(command.args and command.args.strip().lower() == "all")
@@ -257,6 +415,19 @@ def create_bot_router(
 
     @router.message(F.text == MENU_DEADLINES)
     async def menu_deadlines(message: Message) -> None:
+        personal, snapshot = await _personal_snapshot(message)
+        if personal:
+            if snapshot is None:
+                return
+            now = datetime.now(timezone.utc)
+            cutoff = now + timedelta(days=settings.lookahead_days)
+            assignments = [
+                item for item in snapshot.assignments
+                if not (item.submitted and settings.skip_submitted_deadlines)
+                and (item.due_at is None or now <= item.due_at <= cutoff)
+            ]
+            await _reply_chunked(message, format_deadlines_list(assignments, settings.tz_info, now))
+            return
         if not await _is_authorized_message(message):
             return
         await _show_deadlines(message, False)
@@ -277,6 +448,20 @@ def create_bot_router(
 
     @router.message(Command("grades", "courses"))
     async def cmd_grades_or_courses(message: Message, command: CommandObject) -> None:
+        personal, snapshot = await _personal_snapshot(message)
+        if personal:
+            if snapshot is None:
+                return
+            if command.args and command.args.strip().lower() == "recent":
+                grades = sorted(
+                    snapshot.grades,
+                    key=lambda item: item.graded_at or datetime.min.replace(tzinfo=timezone.utc),
+                    reverse=True,
+                )[:20]
+                await _reply_chunked(message, format_grades_list(grades, settings.tz_info))
+            else:
+                await _render_courses(message, snapshot.courses)
+            return
         if not await _is_authorized_message(message):
             return
         if command.args and command.args.strip().lower() == "recent":
@@ -286,6 +471,17 @@ def create_bot_router(
 
     @router.message(F.text == MENU_GRADES)
     async def menu_grades(message: Message) -> None:
+        personal, snapshot = await _personal_snapshot(message)
+        if personal:
+            if snapshot is None:
+                return
+            grades = sorted(
+                snapshot.grades,
+                key=lambda item: item.graded_at or datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True,
+            )[:20]
+            await _reply_chunked(message, format_grades_list(grades, settings.tz_info))
+            return
         if not await _is_authorized_message(message):
             return
         await _show_recent_grades(message)
@@ -298,6 +494,12 @@ def create_bot_router(
 
     @router.message(F.text == MENU_COURSES)
     async def menu_courses(message: Message) -> None:
+        personal, snapshot = await _personal_snapshot(message)
+        if personal:
+            if snapshot is None:
+                return
+            await _render_courses(message, snapshot.courses)
+            return
         if not await _is_authorized_message(message):
             return
         await _show_courses(message)
@@ -307,6 +509,11 @@ def create_bot_router(
             repo = LMSRepository(session)
             courses = await repo.list_courses()
 
+        await _render_courses(message, courses)
+
+    async def _render_courses(
+        message: Message, courses: list[CourseDTO | CourseModel]
+    ) -> None:
         if not courses:
             await message.answer("Список предметов пока пуст. Нажмите «Проверить Moodle».")
             return
@@ -318,11 +525,17 @@ def create_bot_router(
 
     @router.callback_query(F.data == "courses:list")
     async def cb_courses_list(callback: CallbackQuery) -> None:
-        if not await _is_authorized_callback(callback):
-            return
-        async with session_factory() as session:
-            repo = LMSRepository(session)
-            courses = await repo.list_courses()
+        personal, snapshot = await _personal_callback_snapshot(callback)
+        if personal:
+            if snapshot is None:
+                return
+            courses = snapshot.courses
+        else:
+            if not await _is_authorized_callback(callback):
+                return
+            async with session_factory() as session:
+                repo = LMSRepository(session)
+                courses = await repo.list_courses()
 
         msg = callback.message
         if isinstance(msg, Message):
@@ -340,7 +553,10 @@ def create_bot_router(
 
     @router.callback_query(F.data.startswith("course:"))
     async def cb_course_detail(callback: CallbackQuery) -> None:
-        if not await _is_authorized_callback(callback):
+        personal, snapshot = await _personal_callback_snapshot(callback)
+        if personal and snapshot is None:
+            return
+        if not personal and not await _is_authorized_callback(callback):
             return
         raw_id = (callback.data or "").split(":", 1)[1]
         try:
@@ -350,14 +566,22 @@ def create_bot_router(
             return
 
         now = datetime.now(timezone.utc)
-        async with session_factory() as session:
-            repo = LMSRepository(session)
-            course = await repo.get_course(course_id)
+        if personal:
+            course = next((item for item in snapshot.courses if item.id == course_id), None)
             if course is None:
-                await callback.answer("Курс не найден. Запустите /check.", show_alert=True)
+                await callback.answer("Курс не найден в вашем Moodle.", show_alert=True)
                 return
-            assignments = await repo.list_course_assignments(course_id)
-            grades = await repo.list_course_grades(course_id)
+            assignments = [item for item in snapshot.assignments if item.course_id == course_id]
+            grades = [item for item in snapshot.grades if item.course_id == course_id]
+        else:
+            async with session_factory() as session:
+                repo = LMSRepository(session)
+                course = await repo.get_course(course_id)
+                if course is None:
+                    await callback.answer("Курс не найден. Запустите /check.", show_alert=True)
+                    return
+                assignments = await repo.list_course_assignments(course_id)
+                grades = await repo.list_course_grades(course_id)
 
         text = format_course_details(course, assignments, grades, settings.tz_info, now)
         back_markup = _build_course_back_keyboard(course_id)
@@ -410,6 +634,19 @@ def create_bot_router(
     @router.message(Command("status"))
     @router.message(F.text == MENU_STATUS)
     async def cmd_status(message: Message) -> None:
+        if message.chat.type == "private" and message.chat.id != settings.telegram_chat_id:
+            connected = bool(
+                message.from_user
+                and await user_account_exists(session_factory, message.from_user.id)
+            )
+            if connected:
+                await message.answer(
+                    "Личный аккаунт Moodle подключён. При истечении сессии отправьте "
+                    "новую cookie через /connect."
+                )
+            else:
+                await message.answer("Moodle не подключён. Начните с /connect.")
+            return
         if not await _is_authorized_message(message):
             return
         async with session_factory() as session:
@@ -419,6 +656,13 @@ def create_bot_router(
 
     @router.message(F.text)
     async def unknown_text(message: Message) -> None:
+        if message.chat.type == "private" and message.chat.id != settings.telegram_chat_id:
+            await message.answer(
+                "Используйте команды /courses, /grades, /deadlines или /check. "
+                "Если Moodle ещё не подключён, отправьте /connect MoodleSession=значение.",
+                reply_markup=MAIN_MENU,
+            )
+            return
         if not await _is_authorized_message(message):
             return
         await message.answer(

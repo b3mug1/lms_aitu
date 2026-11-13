@@ -4,6 +4,7 @@ import json
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from cryptography.fernet import Fernet
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
@@ -32,6 +33,7 @@ class Settings(BaseSettings):
     moodle_password: SecretStr | None = None
     moodle_service: str = "moodle_mobile_app"
     moodle_session_cookie: SecretStr | None = None
+    moodle_cookie_encryption_key: SecretStr | None = None
     moodle_sso_profile_dir: str | None = None
 
     # Scheduler & Notifications
@@ -96,6 +98,7 @@ class Settings(BaseSettings):
         "moodle_token",
         "moodle_password",
         "moodle_session_cookie",
+        "moodle_cookie_encryption_key",
         "telegram_webhook_secret",
         "cron_secret",
         mode="before",
@@ -104,6 +107,17 @@ class Settings(BaseSettings):
     def empty_secret_to_none(cls, value: Any) -> Any:
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("moodle_cookie_encryption_key")
+    @classmethod
+    def validate_cookie_encryption_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None:
+            return None
+        try:
+            Fernet(value.get_secret_value().encode("ascii"))
+        except (ValueError, UnicodeEncodeError) as exc:
+            raise ValueError("MOODLE_COOKIE_ENCRYPTION_KEY must be a valid Fernet key") from exc
         return value
 
     @field_validator("moodle_username", mode="before")
@@ -128,15 +142,20 @@ class Settings(BaseSettings):
             raise ValueError(
                 "MOODLE_AUTH_MODE=web requires MOODLE_USERNAME and MOODLE_PASSWORD"
             )
-        if self.moodle_auth_mode == "cookie" and not has_cookie:
+        if (
+            self.moodle_auth_mode == "cookie"
+            and not has_cookie
+            and self.moodle_cookie_encryption_key is None
+        ):
             raise ValueError(
                 "MOODLE_AUTH_MODE=cookie requires MOODLE_SESSION_COOKIE"
             )
         if not (has_token or has_login or has_cookie):
-            raise ValueError(
-                "Provide at least one Moodle auth credential: MOODLE_TOKEN, "
-                "MOODLE_USERNAME + MOODLE_PASSWORD, or MOODLE_SESSION_COOKIE"
-            )
+            if self.moodle_cookie_encryption_key is None:
+                raise ValueError(
+                    "Provide Moodle credentials or MOODLE_COOKIE_ENCRYPTION_KEY "
+                    "to enable per-user Telegram Moodle sessions"
+                )
         return self
 
     @property
