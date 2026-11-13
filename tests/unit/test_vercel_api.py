@@ -84,4 +84,4 @@ async def test_cron_requires_secret_and_runs_sync(sample_settings: Settings, mon
         )
     assert response.status_code == 200
     assert response.json() == {"ok": True, "skipped": False, "notifications_sent": 2}
-    sync_service.sync_once.assert_awaited_once_with(trigger="vercel_cron")
+    sync_service.sync_once.assert_awaited_once_with(trigger="scheduled")

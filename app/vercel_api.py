@@ -100,7 +100,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail="Forbidden")
 
         async with _runtime(settings) as (_, __, sync_service):
-            report = await sync_service.sync_once(trigger="vercel_cron")
+            report = await sync_service.sync_once(trigger="scheduled")
         if not report.ok:
             raise HTTPException(status_code=503, detail="Moodle sync failed")
         return {
