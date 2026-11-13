@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from html import escape
+import re
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
@@ -14,9 +16,12 @@ from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
 )
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
+from app.lms.base import LMSAuthError, LMSConnectionError, LMSError
+from app.lms.client import AutoMoodleClient
 from app.notifications.formatter import (
     format_course_details,
     format_grades_list,
@@ -37,6 +42,7 @@ BOT_COMMANDS = [
     BotCommand(command="status", description="Состояние подключения"),
     BotCommand(command="help", description="Как пользоваться ботом"),
     BotCommand(command="setcookie", description="Обновить MoodleSession cookie (SSO)"),
+    BotCommand(command="connect", description="Подключить личную сессию Moodle"),
 ]
 
 MENU_DEADLINES = "Сроки сдачи"
@@ -119,6 +125,15 @@ def create_bot_router(
     @router.message(Command("start", "help"))
     @router.message(F.text == MENU_HELP)
     async def cmd_help(message: Message) -> None:
+        if message.chat.type == "private" and message.chat.id != settings.telegram_chat_id:
+            await message.answer(
+                "Чтобы подключить свой Moodle, отправьте в личном чате команду:\n"
+                "<code>/connect MoodleSession=ваш_cookie</code>\n\n"
+                "Cookie проверяется сразу и не сохраняется ботом. После подключения "
+                "я покажу имя профиля и список курсов. Если Telegram не удалит сообщение "
+                "с cookie, удалите его вручную. Никогда не отправляйте cookie в групповой чат."
+            )
+            return
         if not await _is_authorized_message(message):
             return
         text = (
@@ -132,9 +147,78 @@ def create_bot_router(
             "Проверить Moodle — получить свежие данные сейчас.\n"
             "Состояние — узнать, когда была последняя проверка.\n\n"
             "Дополнительно: <code>/deadlines all</code> показывает и сданные работы; "
-            "<code>/setcookie значение</code> обновляет сессию Moodle при SSO-входе."
+            "<code>/setcookie значение</code> обновляет сессию владельца; "
+            "<code>/connect MoodleSession=значение</code> подключает личную сессию."
         )
         await message.answer(text, reply_markup=MAIN_MENU)
+
+    @router.message(Command("connect"))
+    async def cmd_connect(message: Message, command: CommandObject) -> None:
+        """Verify a user's private Moodle session and return only their profile and courses."""
+        if message.chat.type != "private":
+            await message.answer("Отправьте команду с cookie боту в личном чате, не в группе.")
+            return
+
+        cookie_value = (command.args or "").strip()
+        if cookie_value.startswith("MoodleSession="):
+            cookie_value = cookie_value.partition("=")[2].strip()
+        if not cookie_value or len(cookie_value) > 512 or re.search(r"[;\s]", cookie_value):
+            await message.answer(
+                "Отправьте cookie MoodleSession в личном чате в формате:\n"
+                "<code>/connect MoodleSession=значение</code>"
+            )
+            return
+
+        try:
+            await message.delete()
+        except (TelegramBadRequest, TelegramForbiddenError):
+            pass
+
+        await message.answer("Проверяю сессию Moodle и загружаю ваши курсы...")
+        user_settings = settings.model_copy(
+            update={
+                "moodle_auth_mode": "cookie",
+                "moodle_token": None,
+                "moodle_username": None,
+                "moodle_password": None,
+                "moodle_session_cookie": SecretStr(cookie_value),
+            }
+        )
+        client = AutoMoodleClient(user_settings)
+        try:
+            snapshot = await client.fetch_snapshot()
+        except LMSAuthError:
+            await message.answer(
+                "Не удалось войти в Moodle: cookie неверна или уже истекла. "
+                "Получите новую MoodleSession и попробуйте снова."
+            )
+            return
+        except LMSConnectionError:
+            await message.answer("Не удалось связаться с Moodle. Попробуйте позже.")
+            return
+        except LMSError:
+            await message.answer("Moodle не смог подтвердить сессию. Проверьте cookie и попробуйте снова.")
+            return
+        except Exception:
+            await message.answer("Не удалось завершить подключение к Moodle. Попробуйте позже.")
+            return
+        finally:
+            await client.close()
+
+        lines = ["<b>Подключение к Moodle выполнено</b>"]
+        if snapshot.user_fullname:
+            lines.append(f"<b>Профиль:</b> {escape(snapshot.user_fullname)}")
+        lines.append(f"<b>Курсы ({len(snapshot.courses)}):</b>")
+        if snapshot.courses:
+            lines.extend(
+                f'• <a href="{escape(course.url, quote=True)}">{escape(course.name)}</a>'
+                if course.url.startswith(f"{settings.moodle_base_url}/")
+                else f"• {escape(course.name)}"
+                for course in snapshot.courses
+            )
+        else:
+            lines.append("Moodle не вернул список курсов для этой сессии.")
+        await _reply_chunked(message, "\n".join(lines))
 
     @router.message(Command("check"))
     @router.message(F.text == MENU_CHECK)
