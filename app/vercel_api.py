@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -19,6 +20,8 @@ from app.core.database import create_engine_and_session_factory, init_db
 from app.core.moodle_session import restore_saved_cookie
 from app.lms.client import AutoMoodleClient
 from app.notifications.service import SyncService
+
+logger = logging.getLogger("moodle_bot.webhook")
 
 
 def _matches_secret(provided: str | None, configured: str | None) -> bool:
@@ -90,10 +93,16 @@ def create_app(config: Settings | None = None) -> FastAPI:
         except (ValidationError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="Invalid Telegram update") from exc
 
-        async with _runtime(settings) as (bot, dispatcher, _):
-            if update.message and (update.message.text or "").startswith("/start"):
-                await bot.set_my_commands(BOT_COMMANDS)
-            await dispatcher.feed_update(bot, update)
+        try:
+            async with _runtime(settings) as (bot, dispatcher, _):
+                if update.message and (update.message.text or "").startswith("/start"):
+                    try:
+                        await bot.set_my_commands(BOT_COMMANDS)
+                    except Exception as cmd_exc:
+                        logger.warning("Failed to register bot commands: %s", type(cmd_exc).__name__)
+                await dispatcher.feed_update(bot, update)
+        except Exception:
+            logger.exception("Failed to process Telegram update %s", update.update_id)
         return {"ok": True}
 
     @api.get("/api/cron")

@@ -186,7 +186,7 @@ def analyze_course_scholarship(
     if total is not None and total > 0 and final_exam is not None and final_exam > 0:
         outcome = classify_final_exam_outcome(final_exam)
         if outcome == "летник":
-            status = f"🔴 <b>Летник</b> (Финал: <b>{final_exam:.1f}</b> < 25, Итог: <b>{total:.1f}</b>)"
+            status = f"🔴 <b>Летник</b> (Финал: <b>{final_exam:.1f}</b> ниже 25, Итог: <b>{total:.1f}</b>)"
         elif outcome == "пересдача":
             status = f"🟡 <b>Пересдача</b> (Финал: <b>{final_exam:.1f}</b> [25–49], Итог: <b>{total:.1f}</b>)"
         elif total >= 70.0:
@@ -296,7 +296,7 @@ def format_manual_scholarship(res: ManualScholarshipResult) -> str:
                 f"<i>(При {req:.1f} на файнале: {res.current_points:.2f} + {req * 0.4:.2f} = 70.0)</i>\n",
                 "📌 <b>Что будет при разных оценках за файнал:</b>",
                 f"• 🟢 <b>{ceil_req} – 100:</b> стипендия сохранена (итог ≥ 70) ✅",
-                f"• ⚪ <b>50 – {ceil_req - 1}:</b> файнал сдан, но стипендия потеряна (итог < 70)",
+                f"• ⚪ <b>50 – {ceil_req - 1}:</b> файнал сдан, но стипендия потеряна (итог ниже 70)",
                 "• 🟡 <b>25 – 49:</b> <b>пересдача файнала</b>",
                 "• 🔴 <b>0 – 24:</b> <b>летник</b> (повторное изучение дисциплины)\n",
             ]
@@ -345,13 +345,13 @@ def format_courses_scholarship_summary(
     """Format full summary of scholarship chances across all enrolled courses."""
     if not analyses:
         return (
-            "🎓 <b>Стипендия по предметам</b>\n\n"
+            "🎓 <b>Шансы на стипендию по предметам</b>\n\n"
             "Пока нет курсов с оценками для расчёта. Проверьте Moodle или введите баллы вручную:\n"
             "<code>/scholarship [midterm] [endterm]</code>"
         )
 
     lines = [
-        "🎓 <b>Стипендия по предметам</b>",
+        "🎓 <b>Шансы на стипендию по предметам</b>",
         "Для стипендии итог по каждому предмету должен быть не ниже <b>70</b>.",
         "Итог = Midterm × 30% + Endterm × 30% + Final × 40%.",
     ]

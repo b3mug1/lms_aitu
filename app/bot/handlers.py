@@ -92,7 +92,13 @@ async def _reply_chunked(
     chunks = split_telegram_message(text)
     for idx, chunk in enumerate(chunks):
         markup = reply_markup if idx == len(chunks) - 1 else None
-        await message.answer(chunk, reply_markup=markup)
+        try:
+            await message.answer(chunk, reply_markup=markup)
+        except TelegramBadRequest as exc:
+            if "can't parse entities" in str(exc).lower():
+                await message.answer(chunk, reply_markup=markup, parse_mode=None)
+            else:
+                raise
 
 
 def _build_courses_keyboard(courses: list[CourseDTO | CourseModel]) -> InlineKeyboardMarkup:

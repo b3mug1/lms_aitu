@@ -66,6 +66,40 @@ async def test_authorized_webhook_routes_update(sample_settings: Settings, monke
 
 
 @pytest.mark.asyncio
+async def test_webhook_swallows_handler_exceptions(sample_settings: Settings, monkeypatch) -> None:
+    settings = sample_settings.model_copy(
+        update={"telegram_webhook_secret": SecretStr("webhook-test-secret")}
+    )
+    bot = AsyncMock()
+    dispatcher = AsyncMock()
+    dispatcher.feed_update.side_effect = RuntimeError("Simulated unhandled handler failure")
+
+    @asynccontextmanager
+    async def fake_runtime(_settings: Settings):
+        yield bot, dispatcher, AsyncMock()
+
+    monkeypatch.setattr(vercel_api, "_runtime", fake_runtime)
+    update = Update(
+        update_id=42,
+        message=Message(
+            message_id=2,
+            date=datetime.now(timezone.utc),
+            chat=Chat(id=settings.telegram_chat_id, type="private"),
+            text="/scholarship 75 80",
+        ),
+    )
+    transport = httpx.ASGITransport(app=vercel_api.create_app(settings))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/telegram",
+            content=update.model_dump_json(),
+            headers={"X-Telegram-Bot-Api-Secret-Token": "webhook-test-secret"},
+        )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+@pytest.mark.asyncio
 async def test_cron_requires_secret_and_runs_sync(sample_settings: Settings, monkeypatch) -> None:
     settings = sample_settings.model_copy(update={"cron_secret": SecretStr("cron-test-secret")})
     sync_service = AsyncMock()
