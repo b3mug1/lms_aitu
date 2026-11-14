@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from html import escape
 from typing import Sequence
 
 from app.lms.base import GradeDTO
@@ -344,56 +345,76 @@ def format_courses_scholarship_summary(
     """Format full summary of scholarship chances across all enrolled courses."""
     if not analyses:
         return (
-            "🎓 <b>Расчёт стипендии</b>\n\n"
-            "Список курсов пока пуст. Выполните проверку Moodle или введите баллы вручную:\n"
+            "🎓 <b>Стипендия по предметам</b>\n\n"
+            "Пока нет курсов с оценками для расчёта. Проверьте Moodle или введите баллы вручную:\n"
             "<code>/scholarship [midterm] [endterm]</code>"
         )
 
     lines = [
-        "🎓 <b>Шансы на стипендию по предметам</b>",
-        "Формула AITU: <code>(Midterm × 0.3) + (Endterm × 0.3) + (Final × 0.4) ≥ 70</code>\n",
+        "🎓 <b>Стипендия по предметам</b>",
+        "Для стипендии итог по каждому предмету должен быть не ниже <b>70</b>.",
+        "Итог = Midterm × 30% + Endterm × 30% + Final × 40%.",
     ]
 
-    ready_courses = [a for a in analyses if a.has_full_term and a.result]
+    completed_courses = [
+        a for a in analyses
+        if a.final_exam is not None and a.final_exam > 0 and a.current_total is not None
+    ]
+    calculated_courses = [
+        a for a in analyses
+        if a.has_full_term and a.result and a not in completed_courses
+    ]
     in_progress = [a for a in analyses if not a.has_full_term]
 
-    if ready_courses:
-        lines.append("📚 <b>Предметы с выставленными баллами:</b>")
-        for idx, a in enumerate(ready_courses, start=1):
+    if calculated_courses:
+        lines.append("\n📊 <b>Расчёт перед финалом</b>")
+        for idx, a in enumerate(calculated_courses, start=1):
             res = a.result
             assert res is not None
-            c_name = a.course_name.split("|")[0].strip()
+            c_name = escape(a.course_name.split("|")[0].strip())
             lines.append(f"\n<b>{idx}. {c_name}</b>")
             lines.append(
-                f"• Midterm: <b>{a.midterm:.1f}</b> · Endterm: <b>{a.endterm:.1f}</b> (допуск: <b>{res.current_points:.1f}</b>/60)"
+                f"Midterm <b>{a.midterm:.1f}</b> · Endterm <b>{a.endterm:.1f}</b>"
             )
+            lines.append(f"Набрано до финала: <b>{res.current_points:.1f} / 60</b>")
             req = res.required_final_70
             if req <= 50.0:
-                lines.append(f"🎯 <b>На файнале:</b> <b>≥ 50</b> б. (матем. {max(0.0, req):.1f})")
+                lines.append(
+                    "Финал: <b>не ниже 50</b> — это минимум для сдачи и этого достаточно для итоговых 70."
+                )
             elif req <= 100.0:
-                lines.append(f"🎯 <b>На файнале нужно:</b> <b>{req:.1f}</b> б. (цель: <b>{math.ceil(req)}</b>)")
+                lines.append(
+                    f"Чтобы получить итог 70, набери на финале <b>не меньше {math.ceil(req)}</b>. "
+                    f"Расчётный минимум: {req:.2f}."
+                )
             else:
-                lines.append(f"🎯 <b>На файнале:</b> {a.status_text}")
+                lines.append(
+                    f"Стипендия недостижима: даже со 100 за финал итог будет "
+                    f"<b>{res.max_possible_total:.1f}</b>. Для сдачи предмета нужно не ниже 50 за финал."
+                )
+
+    if completed_courses:
+        lines.append("\n✅ <b>Финал уже выставлен</b>")
+        for a in completed_courses:
+            c_name = escape(a.course_name.split("|")[0].strip())
+            lines.append(f"• <b>{c_name}</b> — {a.status_text}")
 
     if in_progress:
-        lines.append("\n⏳ <b>Остальные предметы:</b>")
+        lines.append("\n⏳ <b>Ожидаются оценки</b>")
         for a in in_progress:
-            c_name = a.course_name.split("|")[0].strip()
+            c_name = escape(a.course_name.split("|")[0].strip())
             if a.midterm is not None:
-                lines.append(f"• <b>{c_name}</b>: Midterm: <b>{a.midterm:.1f}</b>, {a.status_text}")
+                lines.append(
+                    f"• <b>{c_name}</b> — Midterm <b>{a.midterm:.1f}</b>; {a.status_text}"
+                )
             else:
                 lines.append(f"• <b>{c_name}</b>: {a.status_text}")
 
     lines.extend(
         [
-            "\n📋 <b>Правила сдачи файнала в AITU:</b>",
-            "• 🟢 <b>50 – 100 баллов:</b> файнал сдан",
-            "• 🟡 <b>25 – 49 баллов:</b> пересдача файнала",
-            "• 🔴 <b>0 – 24 балла:</b> летник",
-            "\n💡 <b>Ручной расчёт для любых баллов:</b>",
-            "Отправьте команду: <code>/scholarship [midterm] [endterm]</code>",
-            "Например: <code>/scholarship 75 80</code> или <code>/calc 85 90</code>\n",
-            "ℹ️ <i>Для сохранения стипендии все дисциплины должны быть закрыты не ниже 70 (C+).</i>",
+            "\n<b>Порог финала:</b> 50–100 — сдан · 25–49 — пересдача · 0–24 — летник.",
+            "Ручной расчёт: <code>/scholarship 75 80</code> (Midterm Endterm).",
+            "Стипендия сохраняется, если итог по <b>каждому</b> предмету не ниже 70.",
         ]
     )
 
