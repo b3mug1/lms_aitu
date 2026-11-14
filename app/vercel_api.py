@@ -25,8 +25,12 @@ def _matches_secret(provided: str | None, configured: str | None) -> bool:
     return bool(configured) and secrets.compare_digest(provided or "", configured)
 
 
+_db_initialized = False
+
+
 @asynccontextmanager
 async def _runtime(settings: Settings) -> AsyncIterator[tuple[Bot, Dispatcher, SyncService]]:
+    global _db_initialized
     if os.environ.get("VERCEL") and not settings.database_url.startswith("postgresql+asyncpg://"):
         raise RuntimeError("Vercel requires a persistent PostgreSQL DATABASE_URL using asyncpg")
 
@@ -34,7 +38,9 @@ async def _runtime(settings: Settings) -> AsyncIterator[tuple[Bot, Dispatcher, S
     lms_client: AutoMoodleClient | None = None
     bot: Bot | None = None
     try:
-        await init_db(engine)
+        if not _db_initialized:
+            await init_db(engine)
+            _db_initialized = True
         lms_client = AutoMoodleClient(settings)
         await restore_saved_cookie(settings, session_factory, lms_client)
 

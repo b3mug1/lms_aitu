@@ -667,7 +667,7 @@ class MoodleWebClient:
         if not courses:
             return []
 
-        semaphore = asyncio.Semaphore(4)
+        semaphore = asyncio.Semaphore(8)
         all_grades: list[GradeDTO] = []
         detail_candidates: list[AssignmentDTO] = []
         upcoming_cutoff = now + timedelta(days=self._settings.lookahead_days)
@@ -688,7 +688,13 @@ class MoodleWebClient:
                         existing = assignments_by_id.get(item.id)
                         if existing is None:
                             assignments_by_id[item.id] = item
-                            if item.module_type == "assign" or (
+                            if (
+                                item.module_type == "assign"
+                                and (
+                                    item.due_at is None
+                                    or now - timedelta(days=1) <= item.due_at <= upcoming_cutoff
+                                )
+                            ) or (
                                 item.module_type == "quiz" and item.due_at is None
                             ):
                                 detail_candidates.append(item)
