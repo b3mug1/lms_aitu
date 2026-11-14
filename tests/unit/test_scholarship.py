@@ -6,10 +6,39 @@ from app.scholarship import (
     analyze_course_scholarship,
     analyze_scholarship,
     calculate_required_final,
+    classify_final_exam_outcome,
+    effective_final_for_scholarship,
     extract_course_registers,
     format_courses_scholarship_summary,
     format_manual_scholarship,
 )
+
+
+def test_classify_final_exam_outcome() -> None:
+    # 0 - 24: летник
+    assert classify_final_exam_outcome(0.0) == "летник"
+    assert classify_final_exam_outcome(15.5) == "летник"
+    assert classify_final_exam_outcome(24.0) == "летник"
+    assert classify_final_exam_outcome(24.9) == "летник"
+
+    # 25 - 49: пересдача
+    assert classify_final_exam_outcome(25.0) == "пересдача"
+    assert classify_final_exam_outcome(35.0) == "пересдача"
+    assert classify_final_exam_outcome(49.0) == "пересдача"
+    assert classify_final_exam_outcome(49.9) == "пересдача"
+
+    # 50 - 100: сдан
+    assert classify_final_exam_outcome(50.0) == "сдан"
+    assert classify_final_exam_outcome(75.0) == "сдан"
+    assert classify_final_exam_outcome(100.0) == "сдан"
+
+
+def test_effective_final_for_scholarship() -> None:
+    # If mathematically 40, must still score at least 50
+    assert effective_final_for_scholarship(40.0) == 50.0
+    assert effective_final_for_scholarship(-10.0) == 50.0
+    # If mathematically 65, needed is 65
+    assert effective_final_for_scholarship(65.0) == 65.0
 
 
 def test_calculate_required_final_exact() -> None:
@@ -56,6 +85,8 @@ def test_analyze_scholarship_targets() -> None:
     assert "80.0" in formatted
     assert "85.0" in formatted
     assert "51.2" in formatted or "51.3" in formatted
+    assert "летник" in formatted.lower()
+    assert "пересдача" in formatted.lower()
 
 
 def test_extract_course_registers_exact() -> None:
@@ -98,3 +129,5 @@ def test_analyze_course_scholarship() -> None:
     assert "Midterm" in summary
     assert "Endterm" in summary
     assert "66.2" in summary or "66.3" in summary
+    assert "летник" in summary.lower()
+    assert "пересдача" in summary.lower()
