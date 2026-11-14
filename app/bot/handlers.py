@@ -154,20 +154,21 @@ def create_bot_router(
 
     async def _personal_snapshot(message: Message) -> tuple[bool, LMSSnapshot | None]:
         """Load only the calling private user's Moodle account and live data."""
-        is_owner = message.chat.id == settings.telegram_chat_id
+        is_owner = (
+            message.chat.id == settings.telegram_chat_id
+            or (message.from_user and message.from_user.id == settings.telegram_chat_id)
+        )
+        if is_owner:
+            return False, None
         if message.chat.type != "private" or message.from_user is None:
             await message.answer("Используйте бота в личном чате.")
             return True, None
         if settings.moodle_cookie_encryption_key is None:
-            if is_owner:
-                return False, None
             await message.answer("Личные Moodle-аккаунты пока не настроены администратором бота.")
             return True, None
         try:
             cookie = await load_user_cookie(settings, session_factory, message.from_user.id)
             if cookie is None:
-                if is_owner:
-                    return False, None
                 await message.answer(
                     "Сначала подключите Moodle: <code>/connect MoodleSession=значение</code>."
                 )
@@ -195,25 +196,42 @@ def create_bot_router(
         if msg is None:
             return False, None
         if msg.chat.type != "private":
-            await callback.answer("Откройте бота в личном чате.", show_alert=True)
+            try:
+                await callback.answer("Откройте бота в личном чате.", show_alert=True)
+            except TelegramBadRequest:
+                pass
             return True, None
+        is_owner = (
+            callback.from_user.id == settings.telegram_chat_id
+            or (msg.chat and msg.chat.id == settings.telegram_chat_id)
+        )
+        if is_owner:
+            return False, None
         if settings.moodle_cookie_encryption_key is None:
-            if msg.chat.id == settings.telegram_chat_id:
-                return False, None
-            await callback.answer("Личные аккаунты не настроены.", show_alert=True)
+            try:
+                await callback.answer("Личные аккаунты не настроены.", show_alert=True)
+            except TelegramBadRequest:
+                pass
             return True, None
         try:
             cookie = await load_user_cookie(settings, session_factory, callback.from_user.id)
             if cookie is None:
-                if msg.chat.id == settings.telegram_chat_id:
-                    return False, None
-                await callback.answer("Сначала подключите Moodle через /connect.", show_alert=True)
+                try:
+                    await callback.answer("Сначала подключите Moodle через /connect.", show_alert=True)
+                except TelegramBadRequest:
+                    pass
                 return True, None
             return True, await _fetch_snapshot(cookie)
         except LMSAuthError:
-            await callback.answer("Сессия истекла. Подключите новую через /connect.", show_alert=True)
+            try:
+                await callback.answer("Сессия истекла. Подключите новую через /connect.", show_alert=True)
+            except TelegramBadRequest:
+                pass
         except Exception:
-            await callback.answer("Не удалось получить данные Moodle.", show_alert=True)
+            try:
+                await callback.answer("Не удалось получить данные Moodle.", show_alert=True)
+            except TelegramBadRequest:
+                pass
         return True, None
 
     @router.message(Command("start", "help"))
@@ -369,6 +387,18 @@ def create_bot_router(
             return
         if not await _is_authorized_message(message):
             return
+        async with session_factory() as session:
+            repo = LMSRepository(session)
+            state = await repo.get_or_create_sync_state()
+            now_dt = datetime.now(timezone.utc)
+            if state.last_success_at and (now_dt - state.last_success_at).total_seconds() < 60:
+                await message.answer(
+                    "Moodle уже проверен менее минуты назад. Данные актуальны.\n"
+                    "Для просмотра предметов и сроков выберите пункт в меню ниже.",
+                    reply_markup=MAIN_MENU,
+                )
+                return
+
         await message.answer("Проверяю Moodle...")
         report = await sync_service.sync_once(trigger="manual")
         if not report.ok:
@@ -552,7 +582,10 @@ def create_bot_router(
                     )
                 except TelegramBadRequest:
                     pass
-        await callback.answer()
+        try:
+            await callback.answer()
+        except TelegramBadRequest:
+            pass
 
     @router.callback_query(F.data.startswith("course:"))
     async def cb_course_detail(callback: CallbackQuery) -> None:
@@ -602,7 +635,10 @@ def create_bot_router(
                         await msg.answer(chunk, reply_markup=markup)
             except TelegramBadRequest:
                 pass
-        await callback.answer()
+        try:
+            await callback.answer()
+        except TelegramBadRequest:
+            pass
 
     @router.message(Command("setcookie"))
     async def cmd_setcookie(message: Message, command: CommandObject) -> None:

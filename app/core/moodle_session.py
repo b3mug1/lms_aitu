@@ -14,16 +14,10 @@ async def restore_saved_cookie(
     session_factory: async_sessionmaker[AsyncSession],
     lms_client: AutoMoodleClient,
 ) -> None:
-    """Restore a bot-updated Moodle session if its configured base cookie is unchanged."""
-    env_cookie = (
-        settings.moodle_session_cookie.get_secret_value()
-        if settings.moodle_session_cookie
-        else ""
-    )
-    current_env_hash = hashlib.sha256(env_cookie.encode("utf-8")).hexdigest()
+    """Restore a bot-updated Moodle session if available in the database."""
     async with session_factory() as session:
         repo = LMSRepository(session)
         state = await repo.get_or_create_sync_state()
-        if state.session_cookie and state.env_cookie_hash == current_env_hash:
+        if state.session_cookie:
             lms_client.update_session_cookie(state.session_cookie)
         await session.commit()

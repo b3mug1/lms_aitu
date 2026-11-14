@@ -102,11 +102,7 @@ class SyncService:
         async with self._session_factory() as session:
             repo = LMSRepository(session)
             state = await repo.get_or_create_sync_state()
-            previous_cookie = (
-                state.session_cookie
-                if state.session_cookie and state.env_cookie_hash == env_hash
-                else env_cookie
-            )
+            previous_cookie = state.session_cookie or env_cookie
 
         async with self._lock:
             self._lms.update_session_cookie(cleaned)  # type: ignore[attr-defined]
