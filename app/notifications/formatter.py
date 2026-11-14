@@ -84,13 +84,11 @@ def format_welcome_message(
     user_part = f" ({_esc(snapshot.user_fullname)})" if snapshot.user_fullname else ""
     lines = [
         f"<b>Moodle подключён</b>{user_part}",
-        f"Режим: <code>{_esc(snapshot.mode)}</code>",
-        f"Курсов: <b>{len(snapshot.courses)}</b>",
-        f"Заданий/активностей: <b>{len(snapshot.assignments)}</b> (активных дедлайнов: <b>{upcoming_deadlines}</b>)",
-        f"Зафиксировано оценок: <b>{len(snapshot.grades)}</b>",
+        f"Предметы: <b>{len(snapshot.courses)}</b> · оценки: <b>{len(snapshot.grades)}</b>",
+        f"Ближайшие сроки: <b>{upcoming_deadlines}</b>",
         "",
-        "Базовое состояние сохранено. Теперь бот будет присылать уведомления о новых оценках, новых заданиях и приближающихся дедлайнах.",
-        f"Время синхронизации: {format_local_dt(snapshot.fetched_at, tz)}",
+        "Бот сообщит о новых оценках, заданиях и сроках сдачи.",
+        f"Обновлено: {format_local_dt(snapshot.fetched_at, tz)}",
     ]
     return "\n".join(lines)
 
@@ -217,15 +215,15 @@ def format_deadlines_list(
 ) -> str:
     if not assignments:
         if include_submitted:
-            return "🗓 На ближайший период нет заданий со сроком сдачи."
-        return "🗓 На ближайший период нет несданных заданий со сроком сдачи."
+            return "<b>Сроки сдачи</b>\nНа ближайший период заданий со сроком сдачи нет."
+        return "<b>Сроки сдачи</b>\nБлижайших несданных заданий нет."
 
     header = (
         "Ближайшие сроки сдачи · включая сданные"
         if include_submitted
         else "Ближайшие сроки сдачи"
     )
-    lines = [f"🗓 <b>{header} · {len(assignments)}</b>", ""]
+    lines = [f"<b>{header}</b> · {len(assignments)}", ""]
     for item in assignments:
         due_dt = as_utc(item.due_at)
         title_html = (
@@ -234,27 +232,23 @@ def format_deadlines_list(
             else _esc(item.title)
         )
         if item.submitted:
-            status_icon = "✅"
             status = "сдано"
         elif due_dt is None:
-            status_icon = "⚪"
             status = "срок не указан"
         elif due_dt <= now:
-            status_icon = "🔴"
             status = "срок истёк"
         elif (due_dt - now).total_seconds() <= 24 * 60 * 60:
-            status_icon = "🟠"
             status = format_remaining_time(due_dt, now)
         else:
-            status_icon = "📅"
             status = format_remaining_time(due_dt, now)
 
-        lines.append(f"{status_icon} <b>{title_html}</b>")
-        lines.append(f"   {_esc(item.course_name)}")
+        lines.append(f"<b>{title_html}</b>")
+        lines.append(f"{_esc(item.course_name)}")
         if due_dt is not None:
-            lines.append(f"   ⏰ {format_local_dt(due_dt, tz)} · {status}")
+            lines.append(f"{format_local_dt(due_dt, tz)} · {status}")
         else:
-            lines.append(f"   {status}")
+            lines.append(status)
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -314,9 +308,9 @@ def format_course_details(
         if course.url
         else _esc(course_name)
     )
-    lines = [f"📚 <b>{course_title}</b>"]
+    lines = [f"<b>{course_title}</b>"]
     if separator and teacher_name:
-        lines.append(f"👤 <i>{_esc(teacher_name)}</i>")
+        lines.append(f"Преподаватель: {_esc(teacher_name)}")
 
     register_grades = [
         g
@@ -327,13 +321,13 @@ def format_course_details(
 
     if register_grades:
         lines.append("")
-        lines.append(f"📊 <b>Регистр · {len(register_grades)}</b>")
+        lines.append(f"<b>Регистр · {len(register_grades)}</b>")
         for g in register_grades:
             lines.append(f"  • {_esc(g.item_name)} — <b>{_format_grade_score(g)}</b>")
 
     lines.append("")
     if activity_grades:
-        lines.append(f"🎓 <b>Оценки · {len(activity_grades)}</b>")
+        lines.append(f"<b>Оценки · {len(activity_grades)}</b>")
         for g in activity_grades:
             name_html = (
                 f'<a href="{_esc(g.url)}">{_esc(g.item_name)}</a>'
@@ -342,9 +336,9 @@ def format_course_details(
             )
             lines.append(f"  • {name_html} — <b>{_format_grade_score(g)}</b>")
             if g.feedback:
-                lines.append(f"    💬 <i>{_esc(g.feedback)}</i>")
+                lines.append(f"    Комментарий: <i>{_esc(g.feedback)}</i>")
     else:
-        lines.append("🎓 <b>Оценки</b> · пока нет выставленных оценок")
+        lines.append("<b>Оценки</b> · пока нет выставленных оценок")
 
     lines.append("")
     if assignments:
@@ -360,7 +354,7 @@ def format_course_details(
             return (2, -due.timestamp())
 
         sorted_assigns = sorted(assignments, key=_sort_key)
-        lines.append(f"🗓 <b>Задания · {len(sorted_assigns)}</b>")
+        lines.append(f"<b>Задания · {len(sorted_assigns)}</b>")
         for item in sorted_assigns:
             due = as_utc(item.due_at)
             title_html = (
@@ -369,21 +363,20 @@ def format_course_details(
                 else _esc(item.title)
             )
             if due is None:
-                lines.append(f"  ⚪ {title_html} · срок не указан")
+                lines.append(f"  • {title_html} · срок не указан")
             elif item.submitted:
-                lines.append(f"  ✅ {title_html} · сдано · {format_local_dt(due, tz)}")
+                lines.append(f"  • {title_html} · сдано · {format_local_dt(due, tz)}")
             elif due >= now:
-                status_icon = "🟠" if (due - now).total_seconds() <= 24 * 60 * 60 else "📅"
                 lines.append(
-                    f"  {status_icon} {title_html} · {format_local_dt(due, tz)}"
+                    f"  • {title_html} · {format_local_dt(due, tz)}"
                     f" · {format_remaining_time(due, now)}"
                 )
             else:
                 lines.append(
-                    f"  🔴 {title_html} · {format_local_dt(due, tz)} · срок истёк"
+                    f"  • {title_html} · {format_local_dt(due, tz)} · срок истёк"
                 )
     else:
-        lines.append("🗓 <b>Задания</b> · не найдены")
+        lines.append("<b>Задания</b> · не найдены")
 
     return "\n".join(lines)
 

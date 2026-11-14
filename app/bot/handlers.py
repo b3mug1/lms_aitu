@@ -20,6 +20,8 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
+from app.core.connect_tokens import create_connect_token
+from app.core.keep_alive import reset_user_expired_notification
 from app.core.user_sessions import (
     UserSessionError,
     delete_user_account,
@@ -54,16 +56,16 @@ from app.storage.models import CourseModel
 from app.storage.repository import LMSRepository
 
 BOT_COMMANDS = [
+    BotCommand(command="start", description="Открыть главное меню"),
+    BotCommand(command="connect", description="Подключить или обновить Moodle"),
+    BotCommand(command="check", description="Обновить данные Moodle"),
+    BotCommand(command="courses", description="Предметы и задания"),
+    BotCommand(command="grades", description="Последние оценки"),
     BotCommand(command="deadlines", description="Ближайшие сроки сдачи"),
-    BotCommand(command="courses", description="Предметы, задания и оценки"),
-    BotCommand(command="grades", description="Оценки по предметам"),
-    BotCommand(command="scholarship", description="Шансы на стипендию (финал)"),
-    BotCommand(command="check", description="Проверить Moodle сейчас"),
-    BotCommand(command="status", description="Состояние подключения"),
-    BotCommand(command="help", description="Как пользоваться ботом"),
-    BotCommand(command="setcookie", description="Обновить MoodleSession cookie (SSO)"),
-    BotCommand(command="connect", description="Подключить личную сессию Moodle"),
-    BotCommand(command="disconnect", description="Отключить личный Moodle аккаунт"),
+    BotCommand(command="scholarship", description="Расчёт стипендии"),
+    BotCommand(command="status", description="Состояние Moodle"),
+    BotCommand(command="help", description="Помощь"),
+    BotCommand(command="disconnect", description="Отключить Moodle"),
 ]
 
 MENU_DEADLINES = "Сроки сдачи"
@@ -73,6 +75,7 @@ MENU_SCHOLARSHIP = "Стипендия"
 MENU_CHECK = "Проверить Moodle"
 MENU_STATUS = "Состояние"
 MENU_HELP = "Помощь"
+MENU_CONNECT = "Подключить Moodle"
 
 MAIN_MENU = ReplyKeyboardMarkup(
     keyboard=[
@@ -85,9 +88,17 @@ MAIN_MENU = ReplyKeyboardMarkup(
     input_field_placeholder="Выберите действие",
 )
 
+CONNECT_MENU = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text=MENU_CONNECT)], [KeyboardButton(text=MENU_HELP)]],
+    resize_keyboard=True,
+    input_field_placeholder="Подключите свой Moodle",
+)
+
 
 async def _reply_chunked(
-    message: Message, text: str, reply_markup: InlineKeyboardMarkup | None = None
+    message: Message,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | None = None,
 ) -> None:
     chunks = split_telegram_message(text)
     for idx, chunk in enumerate(chunks):
@@ -118,7 +129,7 @@ def _build_course_back_keyboard(course_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="К предметам", callback_data="courses:list"),
+                InlineKeyboardButton(text="Все предметы", callback_data="courses:list"),
                 InlineKeyboardButton(text="Обновить", callback_data=f"course:{course_id}"),
             ]
         ]
@@ -185,14 +196,14 @@ def create_bot_router(
             cookie = await load_user_cookie(settings, session_factory, message.from_user.id)
             if cookie is None:
                 await message.answer(
-                    "Сначала подключите Moodle: <code>/connect MoodleSession=значение</code>."
+                    "Moodle ещё не подключён. Нажмите «Подключить Moodle».",
+                    reply_markup=CONNECT_MENU,
                 )
                 return True, None
             return True, await _fetch_snapshot(cookie)
         except LMSAuthError:
             await message.answer(
-                "Сессия Moodle истекла. Отправьте новую cookie командой "
-                "<code>/connect MoodleSession=значение</code>."
+                "Сессия Moodle истекла. Обновите её командой /connect (в 1 клик через расширение или вручную через /connect MoodleSession=...)."
             )
         except UserSessionError:
             await message.answer(
@@ -262,53 +273,89 @@ def create_bot_router(
             )
             if connected:
                 await message.answer(
-                    "Ваш Moodle подключён. Используйте кнопки меню или команды "
-                    "<code>/courses</code>, <code>/grades</code>, <code>/deadlines</code>.\n"
-                    "Cookie хранится в зашифрованном виде. Для выхода: <code>/disconnect</code>.",
+                    "<b>Ваш Moodle</b>\n"
+                    "Предметы — задания и оценки по курсам.\n"
+                    "Сроки сдачи — ближайшие работы.\n"
+                    "Последние оценки — новые результаты.\n"
+                    "Стипендия — нужный балл на финале.\n\n"
+                    "Для обновления сессии: /connect. Для отключения: /disconnect.",
                     reply_markup=MAIN_MENU,
                 )
                 return
             await message.answer(
-                "Чтобы подключить свой Moodle, отправьте в личном чате команду:\n"
-                "<code>/connect MoodleSession=ваш_cookie</code>\n\n"
-                "Cookie проверяется сразу и сохраняется в зашифрованном виде, чтобы "
-                "вы могли пользоваться командами бота. Отправляйте её только в личном чате."
+                "<b>Ваш Moodle в Telegram</b>\n"
+                "Смотрите предметы, оценки и сроки сдачи в одном месте.\n\n"
+                "Нажмите «Подключить Moodle», чтобы начать (понадобится расширение AITU Moodle Connect).\n"
+                "Либо подключите вручную: <code>/connect MoodleSession=значение</code>.",
+                reply_markup=CONNECT_MENU,
             )
             return
         if not await _is_authorized_message(message):
             return
         text = (
             "<b>Ваш Moodle</b>\n"
-            "Здесь можно посмотреть сроки сдачи, предметы и оценки. "
-            "Бот сам сообщит о новых заданиях, оценках и изменениях сроков.\n\n"
-            "<b>Что выбрать в меню:</b>\n"
-            "Сроки сдачи — ближайшие несданные задания.\n"
-            "Предметы — задания и оценки по каждому курсу.\n"
-            "Последние оценки — новые результаты по всем курсам.\n"
-            "Стипендия — сколько нужно набрать на финале для стипендии (≥ 70).\n"
-            "Проверить Moodle — получить свежие данные сейчас.\n"
-            "Состояние — узнать, когда была последняя проверка.\n\n"
-            "Дополнительно: <code>/scholarship 75 80</code> — ручной расчёт стипендии; "
-            "<code>/deadlines all</code> показывает и сданные работы; "
-            "<code>/setcookie значение</code> обновляет сессию владельца; "
-            "<code>/connect MoodleSession=значение</code> подключает личную сессию."
+            "Предметы — задания и оценки по курсам.\n"
+            "Сроки сдачи — ближайшие работы.\n"
+            "Последние оценки — новые результаты.\n"
+            "Стипендия — нужный балл на финале.\n\n"
+            "«Проверить Moodle» обновит данные. «Состояние» покажет результат последней проверки.\n"
+            "Ручной расчёт: <code>/scholarship 75 80</code>. "
+            "Обновить сессию: /connect или /setcookie."
         )
         await message.answer(text, reply_markup=MAIN_MENU)
 
     @router.message(Command("connect"))
-    async def cmd_connect(message: Message, command: CommandObject) -> None:
+    @router.message(F.text == MENU_CONNECT)
+    async def cmd_connect(message: Message, command: CommandObject | None = None) -> None:
         """Verify a user's private Moodle session and return only their profile and courses."""
         if message.chat.type != "private":
             await message.answer("Отправьте команду с cookie боту в личном чате, не в группе.")
             return
 
-        cookie_value = (command.args or "").strip()
+        cookie_value = (command.args or "").strip() if command else ""
+        if not cookie_value:
+            if message.from_user is None:
+                await message.answer("Не удалось определить Telegram-пользователя.")
+                return
+            if settings.moodle_cookie_encryption_key is None:
+                await message.answer("Подключение Moodle временно недоступно. Попробуйте позже.")
+                return
+            signing_key = (
+                settings.moodle_cookie_encryption_key.get_secret_value()
+                if settings.moodle_cookie_encryption_key
+                else None
+            )
+            token, code = create_connect_token(message.from_user.id, signing_key)
+            connect_url = f"{settings.moodle_base_url}/#tg_token={token}"
+            markup = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="Открыть Moodle",
+                            url=connect_url,
+                        )
+                    ]
+                ]
+            )
+            text = (
+                "<b>Подключение Moodle</b>\n\n"
+                "1. Войдите в Moodle в браузере с расширением AITU Moodle Connect.\n"
+                "2. Нажмите «Открыть Moodle» ниже. Расширение подключит аккаунт к боту.\n\n"
+                "Если Moodle уже открыт, введите в расширении код:\n"
+                f"<code>{code}</code>\n"
+                "<i>Код действует 30 минут.</i>\n\n"
+                "Без расширения: <code>/connect MoodleSession=значение</code> "
+                "в личном чате с ботом."
+            )
+            await message.answer(text, reply_markup=markup)
+            return
+
         if cookie_value.startswith("MoodleSession="):
             cookie_value = cookie_value.partition("=")[2].strip()
-        if not cookie_value or len(cookie_value) > 512 or re.search(r"[;\s]", cookie_value):
+        if len(cookie_value) > 512 or re.search(r"[;\s]", cookie_value):
             await message.answer(
-                "Отправьте cookie MoodleSession в личном чате в формате:\n"
-                "<code>/connect MoodleSession=значение</code>"
+                "Отправьте /connect без параметров, чтобы получить ссылку для автоматического подключения в 1 клик, "
+                "либо передайте <code>/connect MoodleSession=значение</code>."
             )
             return
         if message.from_user is None:
@@ -348,6 +395,7 @@ def create_bot_router(
             await save_user_cookie(
                 settings, session_factory, message.from_user.id, cookie_value
             )
+            reset_user_expired_notification(message.from_user.id)
         except UserSessionError:
             await message.answer("Не удалось безопасно сохранить сессию Moodle.")
             return
@@ -365,10 +413,10 @@ def create_bot_router(
             )
         else:
             lines.append("Moodle не вернул список курсов для этой сессии.")
-        lines.append("\nТеперь доступны команды /courses, /grades и /deadlines.")
+        lines.append("\nВыберите действие в меню ниже.")
         if not secret_message_deleted:
             lines.append("Не удалось удалить исходное сообщение с cookie; удалите его вручную.")
-        await _reply_chunked(message, "\n".join(lines))
+        await _reply_chunked(message, "\n".join(lines), reply_markup=MAIN_MENU)
 
     @router.message(Command("disconnect"))
     async def cmd_disconnect(message: Message) -> None:
@@ -379,7 +427,8 @@ def create_bot_router(
         await message.answer(
             "Личная сессия Moodle удалена из бота."
             if removed
-            else "У вас нет подключённой сессии Moodle."
+            else "У вас нет подключённой сессии Moodle.",
+            reply_markup=CONNECT_MENU,
         )
 
     @router.message(Command("check"))
@@ -628,11 +677,11 @@ def create_bot_router(
         message: Message, courses: list[CourseDTO | CourseModel]
     ) -> None:
         if not courses:
-            await message.answer("Список предметов пока пуст. Нажмите «Проверить Moodle».")
+            await message.answer("<b>Предметы</b>\nСписок пока пуст. Нажмите «Проверить Moodle».")
             return
 
         await message.answer(
-            "<b>Предметы</b>\nВыберите предмет, чтобы посмотреть его задания и оценки:",
+            f"<b>Предметы · {len(courses)}</b>\nВыберите предмет для просмотра заданий и оценок:",
             reply_markup=_build_courses_keyboard(courses),
         )
 
@@ -653,11 +702,11 @@ def create_bot_router(
         msg = callback.message
         if isinstance(msg, Message):
             if not courses:
-                await msg.edit_text("Список предметов пока пуст. Нажмите «Проверить Moodle».")
+                await msg.edit_text("<b>Предметы</b>\nСписок пока пуст. Нажмите «Проверить Moodle».")
             else:
                 try:
                     await msg.edit_text(
-                        "<b>Предметы</b>\nВыберите предмет, чтобы посмотреть его задания и оценки:",
+                        f"<b>Предметы · {len(courses)}</b>\nВыберите предмет для просмотра заданий и оценок:",
                         reply_markup=_build_courses_keyboard(courses),
                     )
                 except TelegramBadRequest:
@@ -760,11 +809,15 @@ def create_bot_router(
             )
             if connected:
                 await message.answer(
-                    "Личный аккаунт Moodle подключён. При истечении сессии отправьте "
-                    "новую cookie через /connect."
+                    "Moodle подключён. Выберите нужный раздел в меню. "
+                    "Если сессия истекла, отправьте /connect.",
+                    reply_markup=MAIN_MENU,
                 )
             else:
-                await message.answer("Moodle не подключён. Начните с /connect.")
+                await message.answer(
+                    "Moodle не подключён. Нажмите «Подключить Moodle».",
+                    reply_markup=CONNECT_MENU,
+                )
             return
         if not await _is_authorized_message(message):
             return
@@ -776,10 +829,15 @@ def create_bot_router(
     @router.message(F.text)
     async def unknown_text(message: Message) -> None:
         if message.chat.type == "private" and message.chat.id != settings.telegram_chat_id:
+            connected = bool(
+                message.from_user
+                and await user_account_exists(session_factory, message.from_user.id)
+            )
             await message.answer(
-                "Используйте команды /courses, /grades, /deadlines или /check. "
-                "Если Moodle ещё не подключён, отправьте /connect MoodleSession=значение.",
-                reply_markup=MAIN_MENU,
+                "Выберите действие в меню ниже."
+                if connected
+                else "Сначала нажмите «Подключить Moodle».",
+                reply_markup=MAIN_MENU if connected else CONNECT_MENU,
             )
             return
         if not await _is_authorized_message(message):

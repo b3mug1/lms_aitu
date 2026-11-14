@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -34,6 +35,14 @@ def create_engine_and_session_factory(
 
 
 async def init_db(engine: AsyncEngine) -> None:
-    """Create database tables if they do not exist."""
+    """Create database tables if they do not exist and ensure columns."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        try:
+            await conn.execute(text("ALTER TABLE moodle_user_accounts ADD COLUMN sync_secret VARCHAR(64)"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE moodle_user_accounts ADD COLUMN user_fullname VARCHAR(255)"))
+        except Exception:
+            pass

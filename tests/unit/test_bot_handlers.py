@@ -177,7 +177,7 @@ async def test_bot_commands_and_chat_authorization(
     tg_session.sent_texts.clear()
     tg_session.sent_markups.clear()
     await dp.feed_update(bot, _make_command_update(2, sample_settings.telegram_chat_id, "/start"))
-    assert "Что выбрать в меню" in tg_session.sent_texts[0][1]
+    assert "Предметы" in tg_session.sent_texts[0][1]
     assert isinstance(tg_session.sent_markups[0], ReplyKeyboardMarkup)
     assert tg_session.sent_markups[0] == MAIN_MENU
 
@@ -231,9 +231,9 @@ async def test_bot_commands_and_chat_authorization(
         ("Сроки сдачи", "Homework 1"),
         ("Последние оценки", "Quiz 1"),
         ("Состояние", "Работает штатно"),
-        ("/scholarship", "Шансы на стипендию"),
-        ("Стипендия", "Шансы на стипендию"),
-        ("/scholarship 75 80", "Расчёт шансов на стипендию"),
+        ("/scholarship", "Стипендия по предметам"),
+        ("Стипендия", "Стипендия по предметам"),
+        ("/scholarship 75 80", "Стипендия · ручной расчёт"),
         ("/calc 80 85", "51.2"),
     ]:
         tg_session.sent_texts.clear()

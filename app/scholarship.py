@@ -186,13 +186,13 @@ def analyze_course_scholarship(
     if total is not None and total > 0 and final_exam is not None and final_exam > 0:
         outcome = classify_final_exam_outcome(final_exam)
         if outcome == "летник":
-            status = f"🔴 <b>Летник</b> (Финал: <b>{final_exam:.1f}</b> ниже 25, Итог: <b>{total:.1f}</b>)"
+            status = f"<b>Летник</b> · финал {final_exam:.1f} · итог {total:.1f}"
         elif outcome == "пересдача":
-            status = f"🟡 <b>Пересдача</b> (Финал: <b>{final_exam:.1f}</b> [25–49], Итог: <b>{total:.1f}</b>)"
+            status = f"<b>Пересдача</b> · финал {final_exam:.1f} · итог {total:.1f}"
         elif total >= 70.0:
-            status = f"✅ <b>Сдан</b> (Итог: <b>{total:.2f}</b>, Финал: <b>{final_exam:.2f}</b>)"
+            status = f"<b>Сдан</b> · итог {total:.2f} · финал {final_exam:.2f}"
         else:
-            status = f"⚠️ <b>Ниже 70</b> (Итог: <b>{total:.2f}</b>, Финал: <b>{final_exam:.2f}</b>)"
+            status = f"<b>Итог ниже 70</b> · итог {total:.2f} · финал {final_exam:.2f}"
 
         return CourseScholarshipAnalysis(
             course_id=course_id,
@@ -213,13 +213,13 @@ def analyze_course_scholarship(
         result = analyze_scholarship(midterm, endterm)
         req = result.required_final_70
         if req <= 50.0:
-            status = f"🟢 <b>Финал: ≥ 50</b> (матем. {req:.1f}, сдача ≥ 50)"
+            status = f"<b>На финале нужно от 50</b> (расчёт: {req:.1f})"
         elif req <= 80.0:
-            status = f"🟡 <b>Финал: ≥ {req:.1f}</b> (цель: {math.ceil(req)})"
+            status = f"<b>На финале нужно от {math.ceil(req)}</b> (расчёт: {req:.2f})"
         elif req <= 100.0:
-            status = f"🟠 <b>Финал: ≥ {req:.1f}</b> (цель: {math.ceil(req)})"
+            status = f"<b>На финале нужно от {math.ceil(req)}</b> (расчёт: {req:.2f})"
         else:
-            status = f"🔴 <b>Стипендия недостижима</b> (сдать финал: ≥ 50)"
+            status = "<b>Стипендия недостижима</b> · для сдачи финала нужно от 50"
 
         return CourseScholarshipAnalysis(
             course_id=course_id,
@@ -234,7 +234,7 @@ def analyze_course_scholarship(
         )
 
     if midterm is not None and midterm > 0:
-        status = "⏳ <i>Ожидается Endterm</i>"
+        status = "<i>Ожидается Endterm</i>"
         return CourseScholarshipAnalysis(
             course_id=course_id,
             course_name=course_name,
@@ -256,88 +256,35 @@ def analyze_course_scholarship(
         current_total=total,
         has_full_term=False,
         result=None,
-        status_text="⏳ <i>Баллы ещё не выставлены</i>",
+        status_text="<i>Баллы ещё не выставлены</i>",
     )
 
 
 def format_manual_scholarship(res: ManualScholarshipResult) -> str:
-    """Format the calculation of scholarship chances for given Midterm & Endterm."""
-    lines = [
-        "🎓 <b>Расчёт шансов на стипендию</b>",
-        f"Формула AITU: <code>(Midterm × 0.3) + (Endterm × 0.3) + (Final × 0.4) ≥ 70</code>\n",
-        "📊 <b>Ваши баллы:</b>",
-        f"• Регистр Midterm (30%): <b>{res.midterm:.1f}</b> → <b>{res.midterm_weighted:.2f}</b> б.",
-        f"• Регистр Endterm (30%): <b>{res.endterm:.1f}</b> → <b>{res.endterm_weighted:.2f}</b> б.",
-        f"• Накопленный допуск: <b>{res.current_points:.2f}</b> / 60.0 б.\n",
-    ]
-
-    req = res.required_final_70
-    if req <= 50.0:
-        ceil_math = math.ceil(max(0.0, req))
-        total_at_50 = round(res.current_points + 50.0 * 0.4, 2)
-        lines.extend(
-            [
-                "🎯 <b>Сколько нужно набрать на файнале:</b>",
-                "🟢 <b>Минимум для сдачи и стипендии: 50 баллов</b>",
-                f"• Математически для 70 достаточно: <b>{max(0.0, req):.1f}</b> (цель: {ceil_math}).",
-                f"• <b>Но по правилам, чтобы сдать файнал, нужно набрать выше 50 (≥ 50)!</b>",
-                f"• При 50 на файнале ваш итог составит <b>{total_at_50:.2f}</b> (порог 70 пройден ✅).\n",
-                "⚠️ <b>Внимание к порогам файнала:</b>",
-                "• 🟡 <b>25 – 49 баллов:</b> пересдача файнала;",
-                "• 🔴 <b>0 – 24 балла:</b> летник (повтор курса).\n",
-            ]
-        )
-    elif req <= 100.0:
-        ceil_req = math.ceil(req)
-        lines.extend(
-            [
-                "🎯 <b>Сколько нужно набрать на файнале:</b>",
-                f"👉 <b>Для стипендии (итог ≥ 70) нужно:</b> от <b>{req:.1f}</b> из 100 (цель: <b>{ceil_req}</b> б.).",
-                f"<i>(При {req:.1f} на файнале: {res.current_points:.2f} + {req * 0.4:.2f} = 70.0)</i>\n",
-                "📌 <b>Что будет при разных оценках за файнал:</b>",
-                f"• 🟢 <b>{ceil_req} – 100:</b> стипендия сохранена (итог ≥ 70) ✅",
-                f"• ⚪ <b>50 – {ceil_req - 1}:</b> файнал сдан, но стипендия потеряна (итог ниже 70)",
-                "• 🟡 <b>25 – 49:</b> <b>пересдача файнала</b>",
-                "• 🔴 <b>0 – 24:</b> <b>летник</b> (повторное изучение дисциплины)\n",
-            ]
-        )
+    """Show the decision first, followed by a short, checkable calculation."""
+    required = res.required_final_70
+    lines = ["<b>Стипендия · ручной расчёт</b>"]
+    if required <= 50:
+        lines.append("<b>Цель: от 50 баллов на финале.</b>")
+        lines.append("Этого достаточно для сдачи финала и итоговых 70.")
+    elif required <= 100:
+        lines.append(f"<b>Цель: от {math.ceil(required)} баллов на финале.</b>")
+        lines.append(f"Точный расчётный минимум: {required:.2f}.")
     else:
-        lines.extend(
-            [
-                "🎯 <b>Сколько нужно набрать на файнале:</b>",
-                "🔴 <b>Стипендиальный порог 70 недостижим.</b>",
-                f"Даже при 100 баллах на файнале итоговый балл составит максимум <b>{res.max_possible_total:.2f}</b>.\n",
-                "👉 <b>Чтобы закрыть предмет без долгов:</b>",
-                "• 🟢 <b>50 – 100 баллов:</b> файнал сдан;",
-                "• 🟡 <b>25 – 49 баллов:</b> <b>пересдача файнала</b>;",
-                "• 🔴 <b>0 – 24 балла:</b> <b>летник</b>.\n",
-            ]
-        )
+        lines.append("<b>Итог 70 недостижим.</b>")
+        lines.append(f"Даже при 100 за финал итог составит {res.max_possible_total:.2f}.")
 
-    lines.append("📈 <b>Ориентиры по оценкам:</b>")
-    for t in res.targets:
-        if not t.achievable:
-            lines.append(f"• <b>{t.label} ({t.target_score:.0f}+)</b>: <i>недостижимо</i>")
-        elif t.required_final <= 50.0:
-            lines.append(
-                f"• <b>{t.label} ({t.target_score:.0f}+)</b>: файнал <b>≥ 50</b> (матем. {max(0.0, t.required_final):.1f})"
-            )
-        else:
-            lines.append(
-                f"• <b>{t.label} ({t.target_score:.0f}+)</b>: файнал <b>{t.required_final:.1f}</b> (цель: {math.ceil(t.required_final)})"
-            )
-
-    lines.extend(
-        [
-            "\n📋 <b>Правила сдачи файнала в AITU:</b>",
-            "• 🟢 <b>50 – 100 баллов:</b> файнал сдан",
-            "• 🟡 <b>25 – 49 баллов:</b> пересдача файнала",
-            "• 🔴 <b>0 – 24 балла:</b> летник",
-        ]
-    )
-
+    lines.extend([
+        "",
+        "<b>Ваши баллы</b>",
+        f"Midterm: {res.midterm:.1f} × 30% = {res.midterm_weighted:.2f}",
+        f"Endterm: {res.endterm:.1f} × 30% = {res.endterm_weighted:.2f}",
+        f"До финала: <b>{res.current_points:.2f} / 60</b>",
+        "",
+        "Финал: 50–100 — сдан · 25–49 — пересдача · 0–24 — летник.",
+        "Итог = Midterm × 30% + Endterm × 30% + Final × 40%.",
+    ])
     return "\n".join(lines)
-
 
 def format_courses_scholarship_summary(
     analyses: list[CourseScholarshipAnalysis],
@@ -345,13 +292,13 @@ def format_courses_scholarship_summary(
     """Format full summary of scholarship chances across all enrolled courses."""
     if not analyses:
         return (
-            "🎓 <b>Шансы на стипендию по предметам</b>\n\n"
+            "<b>Стипендия по предметам</b>\n\n"
             "Пока нет курсов с оценками для расчёта. Проверьте Moodle или введите баллы вручную:\n"
             "<code>/scholarship [midterm] [endterm]</code>"
         )
 
     lines = [
-        "🎓 <b>Шансы на стипендию по предметам</b>",
+        "<b>Стипендия по предметам</b>",
         "Для стипендии итог по каждому предмету должен быть не ниже <b>70</b>.",
         "Итог = Midterm × 30% + Endterm × 30% + Final × 40%.",
     ]
@@ -367,7 +314,7 @@ def format_courses_scholarship_summary(
     in_progress = [a for a in analyses if not a.has_full_term]
 
     if calculated_courses:
-        lines.append("\n📊 <b>Расчёт перед финалом</b>")
+        lines.append("\n<b>Расчёт перед финалом</b>")
         for idx, a in enumerate(calculated_courses, start=1):
             res = a.result
             assert res is not None
@@ -394,13 +341,13 @@ def format_courses_scholarship_summary(
                 )
 
     if completed_courses:
-        lines.append("\n✅ <b>Финал уже выставлен</b>")
+        lines.append("\n<b>Финал уже выставлен</b>")
         for a in completed_courses:
             c_name = escape(a.course_name.split("|")[0].strip())
             lines.append(f"• <b>{c_name}</b> — {a.status_text}")
 
     if in_progress:
-        lines.append("\n⏳ <b>Ожидаются оценки</b>")
+        lines.append("\n<b>Ожидаются оценки</b>")
         for a in in_progress:
             c_name = escape(a.course_name.split("|")[0].strip())
             if a.midterm is not None:

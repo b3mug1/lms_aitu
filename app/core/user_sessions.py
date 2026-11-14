@@ -38,6 +38,8 @@ async def save_user_cookie(
     session_factory: async_sessionmaker[AsyncSession],
     telegram_user_id: int,
     cookie: str,
+    sync_secret: str | None = None,
+    user_fullname: str | None = None,
 ) -> None:
     encrypted_cookie = encrypt_cookie(settings, cookie)
     async with session_factory() as session:
@@ -46,11 +48,37 @@ async def save_user_cookie(
             account = MoodleUserAccountModel(
                 telegram_user_id=telegram_user_id,
                 encrypted_cookie=encrypted_cookie,
+                sync_secret=sync_secret,
+                user_fullname=user_fullname,
             )
             session.add(account)
         else:
             account.encrypted_cookie = encrypted_cookie
+            if sync_secret is not None:
+                account.sync_secret = sync_secret
+            if user_fullname is not None:
+                account.user_fullname = user_fullname
         await session.commit()
+
+
+async def update_user_cookie_silently(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    telegram_user_id: int,
+    sync_secret: str,
+    cookie: str,
+) -> bool:
+    """Silently update cookie if sync_secret matches."""
+    encrypted_cookie = encrypt_cookie(settings, cookie)
+    async with session_factory() as session:
+        account = await session.get(MoodleUserAccountModel, telegram_user_id)
+        if account is None or not account.sync_secret:
+            return False
+        if account.sync_secret != sync_secret:
+            return False
+        account.encrypted_cookie = encrypted_cookie
+        await session.commit()
+        return True
 
 
 async def load_user_cookie(

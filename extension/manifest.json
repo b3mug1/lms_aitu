@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "AITU Moodle Connect",
+  "version": "1.0.0",
+  "description": "Автоматическое подключение Moodle LMS AITU к Telegram-боту без ручного копирования cookies",
+  "permissions": [
+    "cookies",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://lms.astanait.edu.kz/*",
+    "http://63.182.255.51:8000/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://lms.astanait.edu.kz/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_end"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AITU Moodle Connect"
+  }
+}

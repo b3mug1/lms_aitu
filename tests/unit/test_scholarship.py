@@ -81,7 +81,7 @@ def test_analyze_scholarship_targets() -> None:
     assert pytest.approx(target_70.required_final, rel=1e-3) == 51.25
 
     formatted = format_manual_scholarship(result)
-    assert "🎓 <b>Расчёт шансов на стипендию</b>" in formatted
+    assert "<b>Стипендия · ручной расчёт</b>" in formatted
     assert "80.0" in formatted
     assert "85.0" in formatted
     assert "51.2" in formatted or "51.3" in formatted

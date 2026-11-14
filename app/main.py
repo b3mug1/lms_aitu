@@ -14,6 +14,7 @@ from app.bot.handlers import BOT_COMMANDS, create_bot_router
 from app.bot.sender import TelegramNotifier
 from app.core.config import Settings
 from app.core.database import create_engine_and_session_factory, init_db
+from app.core.keep_alive import keep_alive_all_student_sessions
 from app.core.logging import setup_logging
 from app.core.moodle_session import restore_saved_cookie
 from app.lms.client import AutoMoodleClient
@@ -23,13 +24,36 @@ logger = logging.getLogger(__name__)
 
 
 async def _poll_loop(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
     sync_service: SyncService,
+    bot: Bot | None,
     interval_seconds: int,
     stop_event: asyncio.Event,
 ) -> None:
-    logger.info("Background poller started (interval=%ss)", interval_seconds)
+    logger.info("Background poller and session keep-alive started (interval=%ss)", interval_seconds)
     while not stop_event.is_set():
-        await sync_service.sync_once(trigger="poll")
+        # 1. Main owner sync
+        try:
+            await sync_service.sync_once(trigger="poll")
+        except Exception as exc:
+            logger.warning("Owner Moodle sync failed during poll: %s", exc)
+
+        # 2. Perpetual keep-alive for all registered students
+        try:
+            stats = await keep_alive_all_student_sessions(settings, session_factory, bot)
+            if stats["total"] > 0:
+                logger.info(
+                    "Student session keep-alive finished: total=%d, active=%d, rotated=%d, expired=%d, errors=%d",
+                    stats["total"],
+                    stats["active"],
+                    stats["rotated"],
+                    stats["expired"],
+                    stats["errors"],
+                )
+        except Exception as exc:
+            logger.warning("Student session keep-alive loop failed: %s", exc)
+
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
         except TimeoutError:
@@ -59,7 +83,40 @@ async def async_main(once: bool = False) -> int:
     try:
         if once:
             report = await sync_service.sync_once(trigger="oneshot")
+            await keep_alive_all_student_sessions(settings, session_factory, bot)
             return 0 if report.ok else 1
+
+        # Start Connect API server on port 8000 for browser extension / auto-sync
+        api_task = None
+        uvicorn_server = None
+        try:
+            from fastapi import FastAPI
+            from fastapi.middleware.cors import CORSMiddleware
+            import uvicorn
+            from app.api_connect import create_connect_router
+
+            api_app = FastAPI(title="AITU Moodle Connect API")
+            api_app.add_middleware(
+                CORSMiddleware,
+                allow_origins=["*"],
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+            api_app.include_router(create_connect_router(settings, session_factory, bot))
+
+            uvicorn_config = uvicorn.Config(
+                app=api_app,
+                host="0.0.0.0",
+                port=8000,
+                log_level="warning",
+                access_log=False,
+            )
+            uvicorn_server = uvicorn.Server(uvicorn_config)
+            api_task = asyncio.create_task(uvicorn_server.serve(), name="connect-api")
+            logger.info("AITU Moodle Connect API started on port 8000")
+        except Exception as e:
+            logger.warning("Could not start Connect API server: %s", e)
 
         dp = Dispatcher()
         dp.include_router(create_bot_router(settings, session_factory, sync_service))
@@ -72,14 +129,18 @@ async def async_main(once: bool = False) -> int:
                 webhook_info.url,
             )
             stop_event = asyncio.Event()
-            await _poll_loop(sync_service, settings.poll_interval_seconds, stop_event)
+            await _poll_loop(
+                settings, session_factory, sync_service, bot, settings.poll_interval_seconds, stop_event
+            )
             return 0
 
         await bot.delete_webhook(drop_pending_updates=False)
 
         stop_event = asyncio.Event()
         poller_task = asyncio.create_task(
-            _poll_loop(sync_service, settings.poll_interval_seconds, stop_event),
+            _poll_loop(
+                settings, session_factory, sync_service, bot, settings.poll_interval_seconds, stop_event
+            ),
             name="moodle-poller",
         )
         try:
@@ -90,6 +151,12 @@ async def async_main(once: bool = False) -> int:
             with contextlib.suppress(asyncio.CancelledError):
                 await poller_task
     finally:
+        if uvicorn_server is not None:
+            uvicorn_server.should_exit = True
+        if api_task is not None:
+            api_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await api_task
         await lms_client.close()
         await bot.session.close()
         await engine.dispose()

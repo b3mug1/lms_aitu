@@ -134,6 +134,8 @@ class MoodleUserAccountModel(Base):
 
     telegram_user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     encrypted_cookie: Mapped[str] = mapped_column(Text, nullable=False)
+    sync_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_fullname: Mapped[str | None] = mapped_column(String(255), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
