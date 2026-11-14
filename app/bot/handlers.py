@@ -220,6 +220,9 @@ def create_bot_router(
     @router.message(F.text == MENU_HELP)
     async def cmd_help(message: Message) -> None:
         if message.chat.type == "private" and message.chat.id != settings.telegram_chat_id:
+            if settings.moodle_cookie_encryption_key is None:
+                if not await _is_authorized_message(message):
+                    return
             connected = bool(
                 message.from_user
                 and await user_account_exists(session_factory, message.from_user.id)

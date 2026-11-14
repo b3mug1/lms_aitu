@@ -64,6 +64,17 @@ async def async_main(once: bool = False) -> int:
         dp = Dispatcher()
         dp.include_router(create_bot_router(settings, session_factory, sync_service))
         await bot.set_my_commands(BOT_COMMANDS)
+
+        webhook_info = await bot.get_webhook_info()
+        if webhook_info.url:
+            logger.warning(
+                "Telegram webhook is active (%s). Skipping long polling to preserve webhook.",
+                webhook_info.url,
+            )
+            stop_event = asyncio.Event()
+            await _poll_loop(sync_service, settings.poll_interval_seconds, stop_event)
+            return 0
+
         await bot.delete_webhook(drop_pending_updates=False)
 
         stop_event = asyncio.Event()
