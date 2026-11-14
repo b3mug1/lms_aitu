@@ -44,6 +44,12 @@ from app.notifications.formatter import (
     split_telegram_message,
 )
 from app.notifications.service import SyncService
+from app.scholarship import (
+    analyze_course_scholarship,
+    analyze_scholarship,
+    format_courses_scholarship_summary,
+    format_manual_scholarship,
+)
 from app.storage.models import CourseModel
 from app.storage.repository import LMSRepository
 
@@ -51,6 +57,7 @@ BOT_COMMANDS = [
     BotCommand(command="deadlines", description="Ближайшие сроки сдачи"),
     BotCommand(command="courses", description="Предметы, задания и оценки"),
     BotCommand(command="grades", description="Оценки по предметам"),
+    BotCommand(command="scholarship", description="Шансы на стипендию (финал)"),
     BotCommand(command="check", description="Проверить Moodle сейчас"),
     BotCommand(command="status", description="Состояние подключения"),
     BotCommand(command="help", description="Как пользоваться ботом"),
@@ -62,6 +69,7 @@ BOT_COMMANDS = [
 MENU_DEADLINES = "Сроки сдачи"
 MENU_COURSES = "Предметы"
 MENU_GRADES = "Последние оценки"
+MENU_SCHOLARSHIP = "Стипендия"
 MENU_CHECK = "Проверить Moodle"
 MENU_STATUS = "Состояние"
 MENU_HELP = "Помощь"
@@ -69,8 +77,9 @@ MENU_HELP = "Помощь"
 MAIN_MENU = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text=MENU_DEADLINES), KeyboardButton(text=MENU_COURSES)],
-        [KeyboardButton(text=MENU_GRADES), KeyboardButton(text=MENU_CHECK)],
-        [KeyboardButton(text=MENU_STATUS), KeyboardButton(text=MENU_HELP)],
+        [KeyboardButton(text=MENU_GRADES), KeyboardButton(text=MENU_SCHOLARSHIP)],
+        [KeyboardButton(text=MENU_CHECK), KeyboardButton(text=MENU_STATUS)],
+        [KeyboardButton(text=MENU_HELP)],
     ],
     resize_keyboard=True,
     input_field_placeholder="Выберите действие",
@@ -270,9 +279,11 @@ def create_bot_router(
             "Сроки сдачи — ближайшие несданные задания.\n"
             "Предметы — задания и оценки по каждому курсу.\n"
             "Последние оценки — новые результаты по всем курсам.\n"
+            "Стипендия — сколько нужно набрать на финале для стипендии (≥ 70).\n"
             "Проверить Moodle — получить свежие данные сейчас.\n"
             "Состояние — узнать, когда была последняя проверка.\n\n"
-            "Дополнительно: <code>/deadlines all</code> показывает и сданные работы; "
+            "Дополнительно: <code>/scholarship 75 80</code> — ручной расчёт стипендии; "
+            "<code>/deadlines all</code> показывает и сданные работы; "
             "<code>/setcookie значение</code> обновляет сессию владельца; "
             "<code>/connect MoodleSession=значение</code> подключает личную сессию."
         )
@@ -518,6 +529,69 @@ def create_bot_router(
         if not await _is_authorized_message(message):
             return
         await _show_recent_grades(message)
+
+    @router.message(Command("scholarship", "calc", "stipendia"))
+    @router.message(F.text == MENU_SCHOLARSHIP)
+    @router.message(F.text == "🎓 Стипендия")
+    @router.message(F.text == "Шансы на стипендию")
+    async def cmd_scholarship(
+        message: Message, command: CommandObject | None = None
+    ) -> None:
+        args_str = (command.args or "").strip() if command else ""
+        if not args_str and message.text and not message.text.startswith("/"):
+            parts = message.text.split(None, 1)
+            if len(parts) > 1:
+                args_str = parts[1].strip()
+
+        # If user supplied numeric arguments (e.g. "80 85" or "75.5, 80")
+        if args_str:
+            nums = re.findall(r"\d+(?:[.,]\d+)?", args_str)
+            if len(nums) >= 2:
+                try:
+                    m_val = float(nums[0].replace(",", "."))
+                    e_val = float(nums[1].replace(",", "."))
+                    if not (0 <= m_val <= 100 and 0 <= e_val <= 100):
+                        await message.answer(
+                            "Баллы должны быть в диапазоне от 0 до 100. Пример: <code>/scholarship 75 80</code>"
+                        )
+                        return
+                    res = analyze_scholarship(m_val, e_val)
+                    await message.answer(format_manual_scholarship(res))
+                    return
+                except ValueError:
+                    pass
+            await message.answer(
+                "Укажите баллы Midterm и Endterm через пробел:\n"
+                "<code>/scholarship [midterm] [endterm]</code>\n"
+                "Например: <code>/scholarship 75 80</code>"
+            )
+            return
+
+        personal, snapshot = await _personal_snapshot(message)
+        if personal:
+            if snapshot is None:
+                return
+            courses = snapshot.courses
+            grades = snapshot.grades
+            analyses = []
+            for c in courses:
+                c_grades = [g for g in grades if g.course_id == c.id]
+                analyses.append(analyze_course_scholarship(c.id, c.name, c_grades))
+            await _reply_chunked(message, format_courses_scholarship_summary(analyses))
+            return
+
+        if not await _is_authorized_message(message):
+            return
+
+        async with session_factory() as session:
+            repo = LMSRepository(session)
+            courses = await repo.list_courses()
+            analyses = []
+            for c in courses:
+                c_grades = await repo.list_course_grades(c.id)
+                analyses.append(analyze_course_scholarship(c.id, c.name, c_grades))
+
+        await _reply_chunked(message, format_courses_scholarship_summary(analyses))
 
     async def _show_recent_grades(message: Message) -> None:
         async with session_factory() as session:

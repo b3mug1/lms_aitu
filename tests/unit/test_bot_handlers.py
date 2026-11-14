@@ -223,7 +223,7 @@ async def test_bot_commands_and_chat_authorization(
     )
     assert "Выберите предмет" in tg_session.edited_texts[0]
 
-    # 6. /deadlines, /grades recent, /status
+    # 6. /deadlines, /grades recent, /status, /scholarship
     for cmd, expected in [
         ("/deadlines", "Homework 1"),
         ("/grades recent", "Quiz 1"),
@@ -231,6 +231,10 @@ async def test_bot_commands_and_chat_authorization(
         ("Сроки сдачи", "Homework 1"),
         ("Последние оценки", "Quiz 1"),
         ("Состояние", "Работает штатно"),
+        ("/scholarship", "Шансы на стипендию"),
+        ("Стипендия", "Шансы на стипендию"),
+        ("/scholarship 75 80", "Расчёт шансов на стипендию"),
+        ("/calc 80 85", "51.2"),
     ]:
         tg_session.sent_texts.clear()
         await dp.feed_update(bot, _make_command_update(13, sample_settings.telegram_chat_id, cmd))
