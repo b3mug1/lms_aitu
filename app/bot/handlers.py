@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from html import escape
+from hashlib import sha256
 import re
+from time import monotonic
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
@@ -87,6 +89,20 @@ MAIN_MENU = ReplyKeyboardMarkup(
     resize_keyboard=True,
     input_field_placeholder="Выберите действие",
 )
+
+_SNAPSHOT_TTL_SECONDS = 60
+_MAX_CACHED_SNAPSHOTS = 128
+_snapshot_cache: dict[tuple[str, int, str], tuple[float, LMSSnapshot]] = {}
+
+
+def _cached_snapshot_key(database_url: str, user_id: int, cookie: str) -> tuple[str, int, str]:
+    return database_url, user_id, sha256(cookie.encode("utf-8")).hexdigest()
+
+
+def _invalidate_user_snapshot(database_url: str, user_id: int) -> None:
+    for key in list(_snapshot_cache):
+        if key[0] == database_url and key[1] == user_id:
+            _snapshot_cache.pop(key, None)
 
 CONNECT_MENU = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text=MENU_CONNECT)], [KeyboardButton(text=MENU_HELP)]],
@@ -178,7 +194,21 @@ def create_bot_router(
         finally:
             await client.close()
 
-    async def _personal_snapshot(message: Message) -> tuple[bool, LMSSnapshot | None]:
+    async def _fetch_user_snapshot(user_id: int, cookie: str, *, refresh: bool = False) -> LMSSnapshot:
+        key = _cached_snapshot_key(settings.database_url, user_id, cookie)
+        cached = _snapshot_cache.get(key)
+        if not refresh and cached is not None and cached[0] > monotonic():
+            return cached[1]
+        snapshot = await _fetch_snapshot(cookie)
+        if len(_snapshot_cache) >= _MAX_CACHED_SNAPSHOTS:
+            oldest_key = min(_snapshot_cache, key=lambda item: _snapshot_cache[item][0])
+            _snapshot_cache.pop(oldest_key, None)
+        _snapshot_cache[key] = (monotonic() + _SNAPSHOT_TTL_SECONDS, snapshot)
+        return snapshot
+
+    async def _personal_snapshot(
+        message: Message, *, refresh: bool = False
+    ) -> tuple[bool, LMSSnapshot | None]:
         """Load only the calling private user's Moodle account and live data."""
         is_owner = (
             message.chat.id == settings.telegram_chat_id
@@ -200,7 +230,7 @@ def create_bot_router(
                     reply_markup=CONNECT_MENU,
                 )
                 return True, None
-            return True, await _fetch_snapshot(cookie)
+            return True, await _fetch_user_snapshot(message.from_user.id, cookie, refresh=refresh)
         except LMSAuthError:
             await message.answer(
                 "Сессия Moodle истекла. Обновите её командой /connect (в 1 клик через расширение или вручную через /connect MoodleSession=...)."
@@ -247,7 +277,7 @@ def create_bot_router(
                 except TelegramBadRequest:
                     pass
                 return True, None
-            return True, await _fetch_snapshot(cookie)
+            return True, await _fetch_user_snapshot(callback.from_user.id, cookie)
         except LMSAuthError:
             try:
                 await callback.answer("Сессия истекла. Подключите новую через /connect.", show_alert=True)
@@ -399,6 +429,11 @@ def create_bot_router(
         except UserSessionError:
             await message.answer("Не удалось безопасно сохранить сессию Moodle.")
             return
+        _invalidate_user_snapshot(settings.database_url, message.from_user.id)
+        _snapshot_cache[_cached_snapshot_key(settings.database_url, message.from_user.id, cookie_value)] = (
+            monotonic() + _SNAPSHOT_TTL_SECONDS,
+            snapshot,
+        )
 
         lines = ["<b>Подключение к Moodle выполнено</b>"]
         if snapshot.user_fullname:
@@ -424,6 +459,7 @@ def create_bot_router(
             await message.answer("Отключить личный аккаунт можно только в личном чате с ботом.")
             return
         removed = await delete_user_account(session_factory, message.from_user.id)
+        _invalidate_user_snapshot(settings.database_url, message.from_user.id)
         await message.answer(
             "Личная сессия Moodle удалена из бота."
             if removed
@@ -434,7 +470,7 @@ def create_bot_router(
     @router.message(Command("check"))
     @router.message(F.text == MENU_CHECK)
     async def cmd_check(message: Message) -> None:
-        personal, snapshot = await _personal_snapshot(message)
+        personal, snapshot = await _personal_snapshot(message, refresh=True)
         if personal:
             if snapshot is None:
                 return

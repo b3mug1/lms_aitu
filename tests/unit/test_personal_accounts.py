@@ -206,7 +206,11 @@ async def test_personal_accounts_isolation_and_workflow(
         ],
     )
 
+    fetch_calls = 0
+
     async def mock_fetch_snapshot(self):
+        nonlocal fetch_calls
+        fetch_calls += 1
         cookie = self._settings.moodle_session_cookie.get_secret_value()
         if cookie == "cookie_user_a":
             return snap_a
@@ -272,6 +276,10 @@ async def test_personal_accounts_isolation_and_workflow(
         b_grades_text = "\n".join(txt for _, txt in tg_session.sent_texts)
         assert "PenTest Grade" in b_grades_text
         assert "Trees Lab Grade" not in b_grades_text
+        assert fetch_calls == 2  # The course, deadline and grade views reuse each user's snapshot.
+
+        await dp.feed_update(bot, _make_private_msg_update(43, user_a_id, "/check"))
+        assert fetch_calls == 3  # Explicit refresh always fetches live Moodle data.
 
         # 8. Verify encrypted storage at rest: raw cookies are NOT stored in plain text
         cookie_a = await load_user_cookie(settings, db_session_factory, user_a_id)

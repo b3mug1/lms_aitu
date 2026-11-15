@@ -40,7 +40,7 @@ async def test_authorized_webhook_routes_update(sample_settings: Settings, monke
     dispatcher = AsyncMock()
 
     @asynccontextmanager
-    async def fake_runtime(_settings: Settings):
+    async def fake_runtime(_settings: Settings, *, restore_global_cookie: bool = True):
         yield bot, dispatcher, AsyncMock()
 
     monkeypatch.setattr(vercel_api, "_runtime", fake_runtime)
@@ -75,7 +75,7 @@ async def test_webhook_swallows_handler_exceptions(sample_settings: Settings, mo
     dispatcher.feed_update.side_effect = RuntimeError("Simulated unhandled handler failure")
 
     @asynccontextmanager
-    async def fake_runtime(_settings: Settings):
+    async def fake_runtime(_settings: Settings, *, restore_global_cookie: bool = True):
         yield bot, dispatcher, AsyncMock()
 
     monkeypatch.setattr(vercel_api, "_runtime", fake_runtime)
@@ -106,7 +106,7 @@ async def test_cron_requires_secret_and_runs_sync(sample_settings: Settings, mon
     sync_service.sync_once.return_value = SyncReport(ok=True, notifications_sent=2)
 
     @asynccontextmanager
-    async def fake_runtime(_settings: Settings):
+    async def fake_runtime(_settings: Settings, *, restore_global_cookie: bool = True):
         yield AsyncMock(), AsyncMock(), sync_service
 
     monkeypatch.setattr(vercel_api, "_runtime", fake_runtime)

@@ -32,7 +32,9 @@ _db_initialized = False
 
 
 @asynccontextmanager
-async def _runtime(settings: Settings) -> AsyncIterator[tuple[Bot, Dispatcher, SyncService]]:
+async def _runtime(
+    settings: Settings, *, restore_global_cookie: bool = True
+) -> AsyncIterator[tuple[Bot, Dispatcher, SyncService]]:
     global _db_initialized
     if os.environ.get("VERCEL") and not settings.database_url.startswith("postgresql+asyncpg://"):
         raise RuntimeError("Vercel requires a persistent PostgreSQL DATABASE_URL using asyncpg")
@@ -45,7 +47,8 @@ async def _runtime(settings: Settings) -> AsyncIterator[tuple[Bot, Dispatcher, S
             await init_db(engine)
             _db_initialized = True
         lms_client = AutoMoodleClient(settings)
-        await restore_saved_cookie(settings, session_factory, lms_client)
+        if restore_global_cookie:
+            await restore_saved_cookie(settings, session_factory, lms_client)
 
         bot = Bot(
             token=settings.telegram_bot_token.get_secret_value(),
@@ -94,7 +97,13 @@ def create_app(config: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="Invalid Telegram update") from exc
 
         try:
-            async with _runtime(settings) as (bot, dispatcher, _):
+            chat = update.message.chat if update.message else None
+            if chat is None and update.callback_query and update.callback_query.message:
+                chat = update.callback_query.message.chat
+            personal_chat = bool(
+                chat and chat.type == "private" and chat.id != settings.telegram_chat_id
+            )
+            async with _runtime(settings, restore_global_cookie=not personal_chat) as (bot, dispatcher, _):
                 if update.message and (update.message.text or "").startswith("/start"):
                     try:
                         await bot.set_my_commands(BOT_COMMANDS)
