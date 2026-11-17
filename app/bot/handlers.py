@@ -355,7 +355,7 @@ def create_bot_router(
                 if settings.moodle_cookie_encryption_key
                 else None
             )
-            token, code = create_connect_token(message.from_user.id, signing_key)
+            token, _ = create_connect_token(message.from_user.id, signing_key)
             connect_url = f"{settings.moodle_base_url}/#tg_token={token}"
             markup = InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -371,9 +371,7 @@ def create_bot_router(
                 "<b>Подключение Moodle</b>\n\n"
                 "1. Войдите в Moodle в браузере с расширением AITU Moodle Connect.\n"
                 "2. Нажмите «Открыть Moodle» ниже. Расширение подключит аккаунт к боту.\n\n"
-                "Если Moodle уже открыт, введите в расширении код:\n"
-                f"<code>{code}</code>\n"
-                "<i>Код действует 30 минут.</i>\n\n"
+                "<i>Ссылка действует 30 минут.</i>\n\n"
                 "Без расширения: <code>/connect MoodleSession=значение</code> "
                 "в личном чате с ботом."
             )

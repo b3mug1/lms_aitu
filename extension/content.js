@@ -7,12 +7,7 @@
       document.body.appendChild(banner);
     }
     banner.className = `aitu-banner aitu-banner-${type}`;
-    banner.innerHTML = `
-      <div class="aitu-banner-content">
-        <span class="aitu-banner-icon">${type === "success" ? "✅" : type === "error" ? "❌" : "⏳"}</span>
-        <span class="aitu-banner-text">${text}</span>
-      </div>
-    `;
+    banner.textContent = text;
     banner.style.display = "block";
 
     if (autoHideMs > 0) {
@@ -36,7 +31,7 @@
     chrome.runtime.sendMessage({ action: "CONNECT", token: token }, (response) => {
       if (response && response.ok) {
         showBanner(
-          `Telegram-бот успешно подключён! Профиль: <b>${response.fullname}</b> (курсов: ${response.coursesCount}). Оценки и дедлайны будут приходить в Telegram!`,
+          `Telegram-бот успешно подключён! Профиль: ${response.fullname} (курсов: ${response.coursesCount}).`,
           "success",
           6000
         );

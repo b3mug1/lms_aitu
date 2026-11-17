@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -70,6 +71,72 @@ def format_local_dt(dt: datetime | None, tz: ZoneInfo) -> str:
 
 def _esc(text: str | None) -> str:
     return html.escape(text or "", quote=True)
+
+
+_WEEKDAYS_RU = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+
+
+def _trim_trailing_zeros(value: str) -> str:
+    """Drop insignificant decimals for display: '77.00' -> '77', '82.76' stays."""
+    return re.sub(r"\.0+$", "", value)
+
+
+def _grade_percentage(item: GradeModel | GradeDTO) -> float | None:
+    """Best-effort 0-100 percentage behind a gradebook item."""
+    if item.grade_raw is not None and item.grade_max:
+        return item.grade_raw / item.grade_max * 100
+    if item.percentage:
+        match = re.search(r"\d+(?:[.,]\d+)?", item.percentage)
+        if match:
+            return float(match.group(0).replace(",", "."))
+    return None
+
+
+def _score_dot(item: GradeModel | GradeDTO) -> str:
+    """Traffic-light marker for a score: green >=90, yellow 50-89, red <50 (pass mark)."""
+    pct = _grade_percentage(item)
+    if pct is None:
+        return ""
+    if pct >= 90:
+        return "🟢 "
+    if pct >= 50:
+        return "🟡 "
+    return "🔴 "
+
+
+def _compact_dt(dt: datetime | None, tz: ZoneInfo, now: datetime, weekday: bool = True) -> str:
+    """Compact local date like 'сб 21.11, 00:00'; year kept when it differs from now."""
+    utc_dt = as_utc(dt)
+    if utc_dt is None:
+        return "не указан"
+    local = utc_dt.astimezone(tz)
+    now_year = as_utc(now).astimezone(tz).year if as_utc(now) else local.year
+    day_part = f"{local:%d.%m}" if local.year == now_year else f"{local:%d.%m.%Y}"
+    prefix = f"{_WEEKDAYS_RU[local.weekday()]} " if weekday else ""
+    return f"{prefix}{day_part}, {local:%H:%M}"
+
+
+def _display_title(name: str | None) -> str:
+    """Normalize teacher-typed item names for display: 'endterm' -> 'Endterm'."""
+    text = (name or "").strip()
+    if not text:
+        return ""
+    return text[0].upper() + text[1:]
+
+
+def _remaining_short(due_at: datetime, now: datetime) -> str:
+    """Compact countdown: 'через 3 д.', 'через 5 ч. 40 мин.'."""
+    delta_seconds = int((as_utc(due_at) - as_utc(now)).total_seconds())  # type: ignore[operator]
+    if delta_seconds <= 0:
+        return "срок истёк"
+    total_minutes = delta_seconds // 60
+    days, rem_minutes = divmod(total_minutes, 1440)
+    hours, minutes = divmod(rem_minutes, 60)
+    if days > 0:
+        return f"через {days} д."
+    if hours > 0:
+        return f"через {hours} ч." + (f" {minutes} мин." if minutes else "")
+    return f"через {minutes} мин." if minutes else "менее 1 мин."
 
 
 def _format_link(url: str | None, label: str = "Открыть в Moodle") -> str:
@@ -215,45 +282,43 @@ def format_deadlines_list(
 ) -> str:
     if not assignments:
         if include_submitted:
-            return "<b>Сроки сдачи</b>\nНа ближайший период заданий со сроком сдачи нет."
-        return "<b>Сроки сдачи</b>\nБлижайших несданных заданий нет."
+            return "<b>СРОКИ СДАЧИ</b>\nНа ближайший период заданий со сроком сдачи нет."
+        return "<b>СРОКИ СДАЧИ</b>\nБлижайших несданных заданий нет."
 
     header = (
-        "Ближайшие сроки сдачи · включая сданные"
+        "БЛИЖАЙШИЕ СРОКИ СДАЧИ · ВКЛЮЧАЯ СДАННЫЕ"
         if include_submitted
-        else "Ближайшие сроки сдачи"
+        else "БЛИЖАЙШИЕ СРОКИ СДАЧИ"
     )
-    lines = [f"<b>{header}</b> · {len(assignments)}", ""]
+    lines = [f"<b>{header} · {len(assignments)}</b>", ""]
     for item in assignments:
         due_dt = as_utc(item.due_at)
         title_html = (
-            f'<a href="{_esc(item.url)}">{_esc(item.title)}</a>'
+            f'<a href="{_esc(item.url)}">{_esc(_display_title(item.title))}</a>'
             if item.url
-            else _esc(item.title)
+            else _esc(_display_title(item.title))
         )
         if item.submitted:
-            status = "сдано"
+            status = "<i>сдано</i>"
         elif due_dt is None:
-            status = "срок не указан"
+            status = "<i>срок не указан</i>"
         elif due_dt <= now:
-            status = "срок истёк"
-        elif (due_dt - now).total_seconds() <= 24 * 60 * 60:
-            status = format_remaining_time(due_dt, now)
+            status = "<i>срок истёк</i>"
         else:
-            status = format_remaining_time(due_dt, now)
+            status = _remaining_short(due_dt, now)
 
-        lines.append(f"<b>{title_html}</b>")
-        lines.append(f"{_esc(item.course_name)}")
+        detail_parts = [part for part in (_esc(item.course_name),) if part]
         if due_dt is not None:
-            lines.append(f"{format_local_dt(due_dt, tz)} · {status}")
-        else:
-            lines.append(status)
+            detail_parts.append(_compact_dt(due_dt, tz, now))
+        detail_parts.append(status)
+        lines.append(f"<b>{title_html}</b>")
+        lines.append(" · ".join(detail_parts))
         lines.append("")
     return "\n".join(lines)
 
 
 def _format_grade_score(item: GradeModel | GradeDTO) -> str:
-    score = _esc(item.grade_formatted)
+    score = _esc(_trim_trailing_zeros(item.grade_formatted))
     if item.grade_max is not None and "/" not in item.grade_formatted:
         score += f" / {item.grade_max:g}"
     if item.percentage and not (item.grade_raw is not None and item.grade_max == 100):
@@ -272,19 +337,21 @@ def format_grades_list(grades: list[GradeModel | GradeDTO], tz: ZoneInfo) -> str
     for item in grades:
         by_course.setdefault(item.course_name or "Без названия предмета", []).append(item)
 
-    lines = ["<b>Последние оценки</b>", ""]
+    now = datetime.now(tz)
+    lines = ["<b>ПОСЛЕДНИЕ ОЦЕНКИ</b>", ""]
     for course_name, items in by_course.items():
         lines.append(f"<b>{_esc(course_name)}</b>")
         for item in items:
             score = _format_grade_score(item)
             name_html = (
-                f'<a href="{_esc(item.url)}">{_esc(item.item_name)}</a>'
+                f'<a href="{_esc(item.url)}">{_esc(_display_title(item.item_name))}</a>'
                 if item.url
-                else _esc(item.item_name)
+                else _esc(_display_title(item.item_name))
             )
-            lines.append(f"• {name_html} — <b>{score}</b>")
+            line = f"• {name_html} — {_score_dot(item)}<b>{score}</b>"
             if item.graded_at:
-                lines.append(f"  Оценено: {format_local_dt(item.graded_at, tz)}")
+                line += f" · <i>{_compact_dt(item.graded_at, tz, now, weekday=False)}</i>"
+            lines.append(line)
         lines.append("")
     lines.append(
         "Нулевые записи без даты оценки или комментария доступны в разделе «Предметы»."
@@ -321,62 +388,89 @@ def format_course_details(
 
     if register_grades:
         lines.append("")
-        lines.append(f"<b>Регистр · {len(register_grades)}</b>")
+        lines.append(f"<b>РЕГИСТР · {len(register_grades)}</b>")
         for g in register_grades:
-            lines.append(f"  • {_esc(g.item_name)} — <b>{_format_grade_score(g)}</b>")
+            lines.append(
+                f"  • {_esc(_display_title(g.item_name))}"
+                f" — {_score_dot(g)}<b>{_format_grade_score(g)}</b>"
+            )
 
     lines.append("")
     if activity_grades:
-        lines.append(f"<b>Оценки · {len(activity_grades)}</b>")
+        lines.append(f"<b>ОЦЕНКИ · {len(activity_grades)}</b>")
         for g in activity_grades:
             name_html = (
-                f'<a href="{_esc(g.url)}">{_esc(g.item_name)}</a>'
+                f'<a href="{_esc(g.url)}">{_esc(_display_title(g.item_name))}</a>'
                 if g.url
-                else _esc(g.item_name)
+                else _esc(_display_title(g.item_name))
             )
-            lines.append(f"  • {name_html} — <b>{_format_grade_score(g)}</b>")
+            lines.append(f"  • {name_html} — {_score_dot(g)}<b>{_format_grade_score(g)}</b>")
             if g.feedback:
                 lines.append(f"    Комментарий: <i>{_esc(g.feedback)}</i>")
     else:
-        lines.append("<b>Оценки</b> · пока нет выставленных оценок")
+        lines.append("<b>ОЦЕНКИ</b> · пока нет выставленных оценок")
 
     lines.append("")
-    if assignments:
-        # Sort: upcoming unsubmitted first, then future submitted, then past/no-deadline
-        def _sort_key(item: AssignmentModel | AssignmentDTO) -> tuple[int, float]:
-            due = as_utc(item.due_at)
-            if due is None:
-                return (3, 0.0)
-            if due >= now and not item.submitted:
-                return (0, due.timestamp())
-            if due >= now and item.submitted:
-                return (1, due.timestamp())
-            return (2, -due.timestamp())
+    active_assigns = [
+        item for item in assignments
+        if as_utc(item.due_at) is None or as_utc(item.due_at) >= now
+    ]
+    past_assigns = [
+        item for item in assignments
+        if as_utc(item.due_at) is not None and as_utc(item.due_at) < now
+    ]
 
-        sorted_assigns = sorted(assignments, key=_sort_key)
-        lines.append(f"<b>Задания · {len(sorted_assigns)}</b>")
-        for item in sorted_assigns:
+    # Active first: unsubmitted upcoming, then submitted upcoming, then no deadline.
+    def _active_sort_key(item: AssignmentModel | AssignmentDTO) -> tuple[int, float]:
+        due = as_utc(item.due_at)
+        if due is None:
+            return (2, 0.0)
+        if item.submitted:
+            return (1, due.timestamp())
+        return (0, due.timestamp())
+
+    if active_assigns or past_assigns:
+        if active_assigns:
+            lines.append(f"<b>ЗАДАНИЯ · активны {len(active_assigns)}</b>")
+        else:
+            lines.append("<b>ЗАДАНИЯ</b> · активных нет")
+        for item in sorted(active_assigns, key=_active_sort_key):
             due = as_utc(item.due_at)
             title_html = (
-                f'<a href="{_esc(item.url)}">{_esc(item.title)}</a>'
+                f'<a href="{_esc(item.url)}">{_esc(_display_title(item.title))}</a>'
                 if item.url
-                else _esc(item.title)
+                else _esc(_display_title(item.title))
             )
             if due is None:
-                lines.append(f"  • {title_html} · срок не указан")
+                lines.append(f"  • {title_html} · <i>срок не указан</i>")
             elif item.submitted:
-                lines.append(f"  • {title_html} · сдано · {format_local_dt(due, tz)}")
-            elif due >= now:
                 lines.append(
-                    f"  • {title_html} · {format_local_dt(due, tz)}"
-                    f" · {format_remaining_time(due, now)}"
+                    f"  • {title_html} — {_compact_dt(due, tz, now)} · <i>сдано</i>"
                 )
             else:
                 lines.append(
-                    f"  • {title_html} · {format_local_dt(due, tz)} · срок истёк"
+                    f"  • {title_html} — {_compact_dt(due, tz, now)}"
+                    f" · {_remaining_short(due, now)}"
                 )
+        if past_assigns:
+            past_assigns = sorted(
+                past_assigns, key=lambda item: -as_utc(item.due_at).timestamp()  # type: ignore[operator]
+            )
+            quote_lines = [f"<b>Прошедшие дедлайны · {len(past_assigns)}</b>"]
+            for item in past_assigns:
+                due = as_utc(item.due_at)
+                status = "<i>сдано</i>" if item.submitted else "<i>не сдано</i>"
+                quote_lines.append(
+                    f"{_esc(_display_title(item.title))}"
+                    f" — {_compact_dt(due, tz, now, weekday=False)} · {status}"
+                )
+            lines.append(
+                "\n".join(
+                    ["", '<blockquote expandable>', *quote_lines, "</blockquote>"]
+                )
+            )
     else:
-        lines.append("<b>Задания</b> · не найдены")
+        lines.append("<b>ЗАДАНИЯ</b> · не найдены")
 
     return "\n".join(lines)
 

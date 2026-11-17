@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AITU Moodle Telegram Auto-Connect
 // @namespace    https://lms.astanait.edu.kz/
-// @version      1.0.0
+// @version      1.0.1
 // @description  Автоматическая синхронизация сессии Moodle AITU с Telegram-ботом
 // @author       AITU Bot Team
 // @match        https://lms.astanait.edu.kz/*
@@ -9,13 +9,13 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
-// @connect      63.182.255.51
+// @connect      lmsaitu.vercel.app
 // ==/UserScript==
 
 (function () {
   "use strict";
 
-  const API_BASE = "http://63.182.255.51:8000";
+  const API_BASE = "https://lmsaitu.vercel.app";
 
   function getMoodleCookie() {
     return new Promise((resolve) => {
@@ -45,7 +45,7 @@
       document.body.appendChild(b);
     }
     b.style.background = type === "success" ? "#10b981" : type === "error" ? "#ef4444" : "#3b82f6";
-    b.innerHTML = text;
+    b.textContent = text;
     setTimeout(() => {
       b.style.opacity = "0";
       setTimeout(() => b.remove(), 500);

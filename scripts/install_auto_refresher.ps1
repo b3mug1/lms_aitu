@@ -1,4 +1,4 @@
-# Installs Windows Scheduled Task using schtasks.exe to keep MoodleSession alive and automatically refresh it via Microsoft SSO
+# Installs Windows Scheduled Task using native PowerShell cmdlets to keep MoodleSession alive silently
 $ErrorActionPreference = "Stop"
 
 $ProjectDir = (Resolve-Path "$PSScriptRoot\..").Path
@@ -15,23 +15,12 @@ if (-not $VenvPythonw -or -not (Test-Path $VenvPythonw)) {
 
 $TaskName = "Moodle Session Auto Refresher"
 
-# Run command: cd to project dir and run pythonw -m app.moodle_sso_refresher --now
-$Command = "cmd.exe /c cd /d `"$ProjectDir`" && `"$VenvPythonw`" -m app.moodle_sso_refresher --now"
+# Run directly via pythonw with WorkingDirectory set (avoids cmd.exe console popups completely)
+$Action = New-ScheduledTaskAction -Execute $VenvPythonw -Argument "-m app.moodle_sso_refresher --now" -WorkingDirectory $ProjectDir
+$Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 30)
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 
-# Create / replace scheduled task running every 30 minutes
-& schtasks.exe /create /tn $TaskName /tr $Command /sc minute /mo 30 /f
+Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Force
 
-if ($LASTEXITCODE -eq 0) {
-    try {
-        $TaskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-        Set-ScheduledTask -TaskName $TaskName -Settings $TaskSettings -ErrorAction SilentlyContinue | Out-Null
-    } catch {
-        # Optional battery flag
-    }
-    Write-Host "Scheduled Task '$TaskName' successfully registered!"
-    Write-Host "It will run every 30 minutes in the background using pythonw (silent, no popup windows)."
-    Write-Host "Starting first run now..."
-    & schtasks.exe /run /tn $TaskName
-} else {
-    Write-Error "Failed to create scheduled task. Exit code: $LASTEXITCODE"
-}
+Write-Host "Scheduled Task '$TaskName' successfully updated/registered!"
+Write-Host "It will run directly via pythonw in the background without any cmd.exe popups."

@@ -15,6 +15,18 @@ from app import vercel_api
 
 
 @pytest.mark.asyncio
+async def test_connect_api_is_available_on_vercel(sample_settings: Settings) -> None:
+    transport = httpx.ASGITransport(app=vercel_api.create_app(sample_settings))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        health = await client.get("/api/health")
+        rejected = await client.post(
+            "/api/connect-session", json={"token": "invalid", "cookie": "test"}
+        )
+    assert health.status_code == 200
+    assert rejected.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_webhook_rejects_missing_or_invalid_secret(sample_settings: Settings) -> None:
     settings = sample_settings.model_copy(
         update={"telegram_webhook_secret": SecretStr("webhook-test-secret")}
@@ -104,6 +116,10 @@ async def test_cron_requires_secret_and_runs_sync(sample_settings: Settings, mon
     settings = sample_settings.model_copy(update={"cron_secret": SecretStr("cron-test-secret")})
     sync_service = AsyncMock()
     sync_service.sync_once.return_value = SyncReport(ok=True, notifications_sent=2)
+    async def fake_personal_sync(*_args):
+        return {"accounts": 0, "updated": 0, "sent": 0, "failed": 0}
+
+    monkeypatch.setattr(vercel_api, "sync_personal_accounts", fake_personal_sync)
 
     @asynccontextmanager
     async def fake_runtime(_settings: Settings, *, restore_global_cookie: bool = True):
@@ -117,5 +133,12 @@ async def test_cron_requires_secret_and_runs_sync(sample_settings: Settings, mon
             "/api/cron", headers={"Authorization": "Bearer cron-test-secret"}
         )
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "skipped": False, "notifications_sent": 2}
+    assert response.json() == {
+        "ok": True,
+        "skipped": False,
+        "notifications_sent": 2,
+        "personal_accounts": 0,
+        "personal_notifications_sent": 0,
+        "personal_failed": 0,
+    }
     sync_service.sync_once.assert_awaited_once_with(trigger="scheduled")

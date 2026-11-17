@@ -5,5 +5,8 @@
       "maxDuration": 60,
       "excludeFiles": "{tests/**,data/**,.env,.venv/**,**/__pycache__/**}"
     }
-  }
+  },
+  "crons": [
+    {"path": "/api/cron", "schedule": "0 3 * * *"}
+  ]
 }

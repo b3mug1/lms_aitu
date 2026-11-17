@@ -15,11 +15,13 @@ from pydantic import ValidationError
 
 from app.bot.handlers import BOT_COMMANDS, create_bot_router
 from app.bot.sender import TelegramNotifier
+from app.api_connect import create_connect_router
 from app.core.config import Settings
 from app.core.database import create_engine_and_session_factory, init_db
 from app.core.moodle_session import restore_saved_cookie
 from app.lms.client import AutoMoodleClient
 from app.notifications.service import SyncService
+from app.notifications.personal import sync_personal_accounts
 
 logger = logging.getLogger("moodle_bot.webhook")
 
@@ -72,6 +74,15 @@ async def _runtime(
 
 def create_app(config: Settings | None = None) -> FastAPI:
     api = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    connect_settings = config or Settings()  # type: ignore[call-arg]
+    connect_engine, connect_sessions = create_engine_and_session_factory(
+        connect_settings.database_url
+    )
+    api.include_router(create_connect_router(connect_settings, connect_sessions))
+
+    @api.on_event("shutdown")
+    async def close_connect_engine() -> None:
+        await connect_engine.dispose()
 
     @api.post("/api/telegram")
     async def telegram_webhook(request: Request) -> dict[str, bool]:
@@ -123,14 +134,20 @@ def create_app(config: Settings | None = None) -> FastAPI:
         if not _matches_secret(request.headers.get("Authorization"), f"Bearer {cron_secret}"):
             raise HTTPException(status_code=403, detail="Forbidden")
 
-        async with _runtime(settings) as (_, __, sync_service):
+        async with _runtime(settings) as (bot, __, sync_service):
             report = await sync_service.sync_once(trigger="scheduled")
-        if not report.ok:
-            raise HTTPException(status_code=503, detail="Moodle sync failed")
+            engine, session_factory = create_engine_and_session_factory(settings.database_url)
+            try:
+                personal = await sync_personal_accounts(settings, session_factory, bot)
+            finally:
+                await engine.dispose()
         return {
-            "ok": True,
+            "ok": report.ok and personal["failed"] == 0,
             "skipped": report.skipped,
             "notifications_sent": report.notifications_sent,
+            "personal_accounts": personal["accounts"],
+            "personal_notifications_sent": personal["sent"],
+            "personal_failed": personal["failed"],
         }
 
     return api

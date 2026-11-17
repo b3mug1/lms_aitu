@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AITU Moodle Connect",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Автоматическое подключение Moodle LMS AITU к Telegram-боту без ручного копирования cookies",
   "permissions": [
     "cookies",
@@ -9,7 +9,7 @@
   ],
   "host_permissions": [
     "https://lms.astanait.edu.kz/*",
-    "http://63.182.255.51:8000/*"
+    "https://lmsaitu.vercel.app/*"
   ],
   "background": {
     "service_worker": "background.js"

@@ -1,4 +1,4 @@
-const API_BASE = "http://63.182.255.51:8000";
+const API_BASE = "https://lmsaitu.vercel.app";
 
 async function getMoodleCookie() {
   const cookie = await chrome.cookies.get({

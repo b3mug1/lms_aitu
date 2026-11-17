@@ -5,7 +5,7 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 
 from app.core.config import Settings
-from app.storage.models import MoodleUserAccountModel
+from app.storage.models import MoodleUserAccountModel, PersonalSyncStateModel
 
 
 class UserSessionError(Exception):
@@ -102,6 +102,9 @@ async def delete_user_account(
         if account is None:
             return False
         await session.delete(account)
+        state = await session.get(PersonalSyncStateModel, telegram_user_id)
+        if state is not None:
+            await session.delete(state)
         await session.commit()
         return True
 

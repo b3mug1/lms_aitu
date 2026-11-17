@@ -73,8 +73,8 @@ async def test_recent_grades_excludes_unconfirmed_zeros_and_registers(
         assert {grade.id for grade in recent} == {"2:attendance", "2:zero"}
         message = format_grades_list(recent, ZoneInfo("UTC"))
         assert message.count("<b>Computer Networks</b>") == 1
-        assert "Attendance — <b>85.19 / 100</b>" in message
-        assert "Exam — <b>0.00 / 100</b>" in message
+        assert "Attendance — 🟡 <b>85.19 / 100</b>" in message
+        assert "Exam — 🔴 <b>0 / 100</b>" in message
         assert "Register Midterm" not in message
         assert "Assignment 1" not in message
 

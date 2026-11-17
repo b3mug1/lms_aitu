@@ -139,3 +139,15 @@ class MoodleUserAccountModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
+
+
+class PersonalSyncStateModel(Base):
+    """Last delivered Moodle state for one Telegram user."""
+
+    __tablename__ = "personal_sync_states"
+
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    grades_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    assignments_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    reminders_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    last_checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

@@ -37,7 +37,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Connect button click
   btnConnect.addEventListener("click", () => {
-    const token = tokenInput.value.trim();
+    const entered = tokenInput.value.trim();
+    const token = entered.match(/(?:#|[?&])tg_token=([A-Za-z0-9_-]+)/)?.[1] || entered;
     if (!token) {
       showMessage("Введите код подключения из бота", true);
       return;
