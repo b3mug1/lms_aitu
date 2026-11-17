@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import html
+import math
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.lms.base import AssignmentDTO, CourseDTO, GradeDTO, LMSSnapshot
+from app.scholarship import (
+    check_admission,
+    classify_final_exam_outcome,
+    effective_final_for_scholarship,
+    extract_course_registers,
+    total_to_letter_gpa,
+)
 from app.storage.models import AssignmentModel, CourseModel, GradeModel, SyncStateModel, as_utc
 
 _MODULE_LABELS = {
@@ -359,6 +367,78 @@ def format_grades_list(grades: list[GradeModel | GradeDTO], tz: ZoneInfo) -> str
     return "\n".join(lines)
 
 
+def _format_course_outcome(
+    grades: list[GradeModel | GradeDTO],
+) -> list[str]:
+    """Outcome block per AITU rules: admission, exam requirement, Total -> letter/GPA."""
+    midterm, endterm, final_exam, course_total = extract_course_registers(grades)
+    if midterm is None and endterm is None:
+        return []
+
+    def _fmt(value: float) -> str:
+        return f"{value:g}"
+
+    admission = check_admission(midterm, endterm)
+    lines: list[str] = []
+    rk_line = (
+        f"РК1 {_fmt(midterm)} · РК2 {_fmt(endterm)}"
+        if midterm is not None and endterm is not None
+        else f"РК1 {_fmt(midterm) if midterm is not None else '—'}"
+        f" · РК2 {_fmt(endterm) if endterm is not None else '—'}"
+    )
+    if admission.register_term is not None:
+        rk_line += f" · Term {_fmt(admission.register_term)}"
+
+    if not admission.admitted:
+        lines.append("<b>ИТОГ · ⚠ НЕ ДОПУЩЕН</b>")
+        lines.append(f"  • {rk_line}")
+        for problem in admission.problems:
+            lines.append(f"  • {_esc(problem)} — летник")
+        return lines
+
+    lines.append("<b>ИТОГ · ДОПУСК ЕСТЬ</b>")
+    lines.append(f"  • {rk_line}")
+
+    if midterm is None or endterm is None:
+        return lines
+
+    current_points = (midterm * 0.3) + (endterm * 0.3)
+    if final_exam is not None and final_exam > 0:
+        total = course_total if course_total is not None else current_points + final_exam * 0.4
+        outcome = classify_final_exam_outcome(final_exam)
+        outcome_text = {"сдан": "сдан", "пересдача": "пересдача", "летник": "летник"}[outcome]
+        letter, gpa = total_to_letter_gpa(total)
+        lines.append(
+            f"  • Финал {_fmt(final_exam)} — <b>{outcome_text}</b>"
+            f" · Total {total:.1f} → <b>{letter}</b> ({gpa:g})"
+        )
+        return lines
+
+    lines.append(f"  • Набрано: {current_points:.1f} / 60")
+    pass_final = effective_final_for_scholarship(
+        (50.0 - current_points) / 0.4
+    )
+    pass_total = current_points + pass_final * 0.4
+    letter_pass, _ = total_to_letter_gpa(pass_total)
+    sch_final = effective_final_for_scholarship(
+        (70.0 - current_points) / 0.4
+    )
+    if sch_final <= 100.0:
+        letter_sch, _ = total_to_letter_gpa(70.0)
+        lines.append(
+            f"  • На финале: от {math.ceil(pass_final)} — сдача"
+            f" (итог {pass_total:.1f}, {letter_pass})"
+            f" · от {math.ceil(sch_final)} — стипендия (итог 70, {letter_sch})"
+        )
+    else:
+        lines.append(
+            f"  • На финале: от {math.ceil(pass_final)} — сдача"
+            f" (итог {pass_total:.1f}, {letter_pass})"
+            f" · стипендия (70) недостижима"
+        )
+    return lines
+
+
 def format_course_details(
     course: CourseModel | CourseDTO,
     assignments: list[AssignmentModel | AssignmentDTO],
@@ -409,6 +489,11 @@ def format_course_details(
                 lines.append(f"    Комментарий: <i>{_esc(g.feedback)}</i>")
     else:
         lines.append("<b>ОЦЕНКИ</b> · пока нет выставленных оценок")
+
+    outcome_lines = _format_course_outcome(grades)
+    if outcome_lines:
+        lines.append("")
+        lines.extend(outcome_lines)
 
     lines.append("")
     active_assigns = [

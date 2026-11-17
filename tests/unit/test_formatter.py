@@ -203,6 +203,75 @@ def test_format_course_details_no_deadline_and_no_assignments() -> None:
     assert "<b>ЗАДАНИЯ</b> · не найдены" in msg
 
 
+def _grade(name: str, raw: float, formatted: str | None = None) -> GradeDTO:
+    return GradeDTO(
+        id=f"1:{name}",
+        course_id=1,
+        item_name=name,
+        grade_raw=raw,
+        grade_formatted=formatted or f"{raw:g}",
+        grade_max=100,
+    )
+
+
+def test_format_course_details_outcome_admitted_before_final() -> None:
+    tz = ZoneInfo("Asia/Almaty")
+    now = datetime(2026, 11, 17, 12, 0, tzinfo=timezone.utc)
+    course = CourseDTO(id=1, name="Research Methods|Alua")
+    grades = [
+        _grade("Register Midterm", 77),
+        _grade("Register Endterm", 80),
+    ]
+    msg = format_course_details(course, [], grades, tz, now)
+
+    assert "<b>ИТОГ · ДОПУСК ЕСТЬ</b>" in msg
+    assert "РК1 77 · РК2 80 · Term 78.5" in msg
+    assert "Набрано: 47.1 / 60" in msg
+    assert "от 50 — сдача" in msg
+    assert "от 58 — стипендия (итог 70, C+)" in msg
+
+
+def test_format_course_details_outcome_final_graded() -> None:
+    tz = ZoneInfo("Asia/Almaty")
+    now = datetime(2026, 11, 17, 12, 0, tzinfo=timezone.utc)
+    course = CourseDTO(id=1, name="Research Methods|Alua")
+    grades = [
+        _grade("Register Midterm", 77),
+        _grade("Register Endterm", 80),
+        _grade("Register Final", 82),
+        _grade("Register(not to edit) total", 79.4, "79.40"),
+    ]
+    msg = format_course_details(course, [], grades, tz, now)
+
+    assert "Финал 82 — <b>сдан</b>" in msg
+    assert "Total 79.4 → <b>B-</b> (2.67)" in msg
+
+
+def test_format_course_details_outcome_not_admitted() -> None:
+    tz = ZoneInfo("Asia/Almaty")
+    now = datetime(2026, 11, 17, 12, 0, tzinfo=timezone.utc)
+    course = CourseDTO(id=1, name="Research Methods|Alua")
+    grades = [
+        _grade("Register Midterm", 22),
+        _grade("Register Endterm", 80),
+    ]
+    msg = format_course_details(course, [], grades, tz, now)
+
+    assert "<b>ИТОГ · ⚠ НЕ ДОПУЩЕН</b>" in msg
+    assert "РК Midterm 22 &lt; 25 — летник" in msg
+    assert "Набрано" not in msg  # no scholarship math when blocked
+
+
+def test_format_course_details_outcome_absent_without_registers() -> None:
+    tz = ZoneInfo("Asia/Almaty")
+    now = datetime(2026, 11, 17, 12, 0, tzinfo=timezone.utc)
+    course = CourseDTO(id=1, name="Research Methods|Alua")
+    grades = [_grade("Attendance", 82.76)]
+    msg = format_course_details(course, [], grades, tz, now)
+
+    assert "ИТОГ" not in msg
+
+
 def test_split_telegram_message_respects_limit() -> None:
     lines = [f"Line {i}: " + ("x" * 80) for i in range(100)]
     big_text = "\n".join(lines)

@@ -131,3 +131,77 @@ def test_analyze_course_scholarship() -> None:
     assert "66.2" in summary or "66.3" in summary
     assert "летник" in summary.lower()
     assert "пересдача" in summary.lower()
+
+
+def test_total_to_letter_gpa_scale_bounds() -> None:
+    from app.scholarship import total_to_letter_gpa
+
+    assert total_to_letter_gpa(95.0) == ("A", 4.0)
+    assert total_to_letter_gpa(100.0) == ("A", 4.0)
+    assert total_to_letter_gpa(90.0) == ("A-", 3.67)
+    assert total_to_letter_gpa(85.0) == ("B+", 3.33)
+    assert total_to_letter_gpa(80.0) == ("B", 3.0)
+    assert total_to_letter_gpa(75.0) == ("B-", 2.67)
+    assert total_to_letter_gpa(70.0) == ("C+", 2.33)
+    assert total_to_letter_gpa(65.0) == ("C", 2.0)
+    assert total_to_letter_gpa(60.0) == ("C-", 1.67)
+    assert total_to_letter_gpa(55.0) == ("D+", 1.33)
+    assert total_to_letter_gpa(50.0) == ("D", 1.0)
+    assert total_to_letter_gpa(30.0) == ("FX", 0.0)
+    assert total_to_letter_gpa(49.0) == ("FX", 0.0)
+    assert total_to_letter_gpa(29.0) == ("F", 0.0)
+    assert total_to_letter_gpa(0.0) == ("F", 0.0)
+    # Fractional totals fall to the scale step they have reached
+    assert total_to_letter_gpa(79.4) == ("B-", 2.67)
+    assert total_to_letter_gpa(79.99) == ("B-", 2.67)
+    assert total_to_letter_gpa(84.5) == ("B", 3.0)
+    assert total_to_letter_gpa(49.5) == ("FX", 0.0)
+
+
+def test_check_admission_thresholds() -> None:
+    from app.scholarship import check_admission
+
+    # RK exactly 25 each: passes RK check but Term 25 < 50 -> not admitted
+    at_rk_min = check_admission(25.0, 25.0)
+    assert at_rk_min.admitted is False
+    assert at_rk_min.register_term == 25.0
+    assert any("Register Term" in p for p in at_rk_min.problems)
+
+    # Term exactly 50 -> admitted
+    assert check_admission(50.0, 50.0).admitted is True
+
+    # RK below 25 -> not admitted, Term average irrelevant
+    blocked = check_admission(22.0, 80.0)
+    assert blocked.admitted is False
+    assert blocked.register_term == 51.0
+    assert any("Midterm" in p for p in blocked.problems)
+    assert not any("Endterm" in p for p in blocked.problems)
+
+    # Term < 50 despite both RK >= 25
+    low_term = check_admission(40.0, 58.0)
+    assert low_term.admitted is False
+    assert any("Register Term" in p for p in low_term.problems)
+
+    # Missing data: no problems yet
+    partial = check_admission(30.0, None)
+    assert partial.admitted is True
+    assert partial.register_term is None
+
+
+def test_analyze_course_scholarship_admission_hard_block() -> None:
+    grades = [
+        GradeDTO(
+            id="1", course_id=11, item_name="Register Midterm", grade_raw=22.0, grade_formatted="22.0"
+        ),
+        GradeDTO(
+            id="2", course_id=11, item_name="Register Endterm", grade_raw=80.0, grade_formatted="80.0"
+        ),
+    ]
+    analysis = analyze_course_scholarship(11, "Blocked Course", grades)
+    assert "Не допущен" in analysis.status_text
+    assert "РК Midterm 22 &lt; 25" in analysis.status_text
+    assert analysis.result is None
+
+    summary = format_courses_scholarship_summary([analysis])
+    assert "Не допущен" in summary
+    assert "нужно от" not in summary  # scholarship calculation is hidden

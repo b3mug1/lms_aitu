@@ -10,6 +10,78 @@ from app.storage.models import GradeModel
 
 
 @dataclass(frozen=True)
+class GradeScaleEntry:
+    letter: str
+    gpa: float
+    min_total: float
+    max_total: float
+
+
+# Official AITU scale: Total -> letter grade / GPA (bounds inclusive).
+GRADE_SCALE: tuple[GradeScaleEntry, ...] = (
+    GradeScaleEntry("A", 4.0, 95, 100),
+    GradeScaleEntry("A-", 3.67, 90, 94),
+    GradeScaleEntry("B+", 3.33, 85, 89),
+    GradeScaleEntry("B", 3.0, 80, 84),
+    GradeScaleEntry("B-", 2.67, 75, 79),
+    GradeScaleEntry("C+", 2.33, 70, 74),
+    GradeScaleEntry("C", 2.0, 65, 69),
+    GradeScaleEntry("C-", 1.67, 60, 64),
+    GradeScaleEntry("D+", 1.33, 55, 59),
+    GradeScaleEntry("D", 1.0, 50, 54),
+    GradeScaleEntry("FX", 0.0, 30, 49),
+    GradeScaleEntry("F", 0.0, 0, 29),
+)
+
+
+def total_to_letter_gpa(total: float) -> tuple[str, float]:
+    """Map a Total score (0-100) to (letter grade, GPA) per the AITU scale.
+
+    Scale bounds are integers while totals may be fractional (e.g. 79.4),
+    so the first entry whose lower bound the total reaches wins.
+    """
+    for entry in GRADE_SCALE:
+        if total >= entry.min_total:
+            return entry.letter, entry.gpa
+    return "F", 0.0
+
+
+@dataclass(frozen=True)
+class AdmissionStatus:
+    admitted: bool
+    register_term: float | None  # (midterm + endterm) / 2
+    problems: list[str]  # e.g. "РК Midterm 22 < 25"
+
+
+ADMISSION_RK_MIN = 25.0  # each register control must be >= 25
+ADMISSION_TERM_MIN = 50.0  # Register Term average must be >= 50
+
+
+def check_admission(midterm: float | None, endterm: float | None) -> AdmissionStatus:
+    """Check exam admission per AITU rules: RK1 >= 25, RK2 >= 25, Term >= 50."""
+    problems: list[str] = []
+    values = [v for v in (midterm, endterm) if v is not None]
+    register_term = (
+        round(sum(values) / len(values), 2) if len(values) == 2 else None
+    )
+    if midterm is not None and midterm < ADMISSION_RK_MIN:
+        problems.append(f"РК Midterm {_fmt_admission_val(midterm)} < 25")
+    if endterm is not None and endterm < ADMISSION_RK_MIN:
+        problems.append(f"РК Endterm {_fmt_admission_val(endterm)} < 25")
+    if register_term is not None and register_term < ADMISSION_TERM_MIN:
+        problems.append(f"Register Term {_fmt_admission_val(register_term)} < 50")
+    return AdmissionStatus(
+        admitted=not problems,
+        register_term=register_term,
+        problems=problems,
+    )
+
+
+def _fmt_admission_val(value: float) -> str:
+    return f"{value:g}"
+
+
+@dataclass(frozen=True)
 class TargetThreshold:
     label: str
     target_score: float
@@ -210,6 +282,23 @@ def analyze_course_scholarship(
 
     # In progress
     if midterm is not None and midterm > 0 and endterm is not None and endterm > 0:
+        admission = check_admission(midterm, endterm)
+        if not admission.admitted:
+            status = (
+                "<b>⚠ Не допущен к экзамену — летник</b> · "
+                + escape("; ".join(admission.problems))
+            )
+            return CourseScholarshipAnalysis(
+                course_id=course_id,
+                course_name=course_name,
+                midterm=midterm,
+                endterm=endterm,
+                final_exam=final_exam,
+                current_total=total,
+                has_full_term=True,
+                result=None,
+                status_text=status,
+            )
         result = analyze_scholarship(midterm, endterm)
         req = result.required_final_70
         if req <= 50.0:
@@ -311,7 +400,17 @@ def format_courses_scholarship_summary(
         a for a in analyses
         if a.has_full_term and a.result and a not in completed_courses
     ]
+    blocked_courses = [
+        a for a in analyses
+        if a.has_full_term and a.result is None and a not in completed_courses
+    ]
     in_progress = [a for a in analyses if not a.has_full_term]
+
+    if blocked_courses:
+        lines.append("\n<b>Не допущены к экзамену</b>")
+        for a in blocked_courses:
+            c_name = escape(a.course_name.split("|")[0].strip())
+            lines.append(f"• <b>{c_name}</b> — {a.status_text}")
 
     if calculated_courses:
         lines.append("\n<b>Расчёт перед финалом</b>")
