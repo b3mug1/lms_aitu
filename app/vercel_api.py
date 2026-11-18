@@ -84,6 +84,10 @@ def create_app(config: Settings | None = None) -> FastAPI:
     async def close_connect_engine() -> None:
         await connect_engine.dispose()
 
+    @api.on_event("startup")
+    async def initialize_connect_database() -> None:
+        await init_db(connect_engine)
+
     @api.post("/api/telegram")
     async def telegram_webhook(request: Request) -> dict[str, bool]:
         settings = config or Settings()  # type: ignore[call-arg]
@@ -121,8 +125,9 @@ def create_app(config: Settings | None = None) -> FastAPI:
                     except Exception as cmd_exc:
                         logger.warning("Failed to register bot commands: %s", type(cmd_exc).__name__)
                 await dispatcher.feed_update(bot, update)
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to process Telegram update %s", update.update_id)
+            raise HTTPException(status_code=500, detail="Telegram update processing failed") from exc
         return {"ok": True}
 
     @api.get("/api/cron")

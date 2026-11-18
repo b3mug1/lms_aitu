@@ -48,3 +48,13 @@ async def init_db(engine: AsyncEngine) -> None:
             await conn.execute(text("ALTER TABLE moodle_user_accounts ADD COLUMN sync_secret VARCHAR(64)"))
         if "user_fullname" not in columns:
             await conn.execute(text("ALTER TABLE moodle_user_accounts ADD COLUMN user_fullname VARCHAR(255)"))
+        personal_columns = await conn.run_sync(
+            lambda sync_conn: {
+                column["name"]
+                for column in inspect(sync_conn).get_columns("personal_sync_states")
+            }
+        )
+        if "pending_messages_json" not in personal_columns:
+            await conn.execute(
+                text("ALTER TABLE personal_sync_states ADD COLUMN pending_messages_json TEXT NOT NULL DEFAULT '[]'")
+            )

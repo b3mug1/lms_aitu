@@ -54,6 +54,21 @@ async def sync_personal_accounts(
         if monotonic() >= deadline:
             break
         try:
+            # Drain any messages left by an interrupted previous run before
+            # fetching a newer snapshot for this account.
+            async with session_factory() as session:
+                state = await session.get(PersonalSyncStateModel, user_id)
+                pending = json.loads(state.pending_messages_json) if state else []
+            while pending:
+                await bot.send_message(chat_id=user_id, text=pending[0])
+                pending.pop(0)
+                async with session_factory() as session:
+                    state = await session.get(PersonalSyncStateModel, user_id)
+                    if state is not None:
+                        state.pending_messages_json = json.dumps(pending)
+                        await session.commit()
+                result["sent"] += 1
+
             async with session_factory() as session:
                 account = await session.get(MoodleUserAccountModel, user_id)
                 if account is None:
@@ -96,6 +111,7 @@ async def sync_personal_accounts(
                             grades_json=json.dumps(grades),
                             assignments_json=json.dumps(assignments),
                             reminders_json="[]",
+                            pending_messages_json="[]",
                             last_checked_at=now,
                         )
                     )
@@ -132,23 +148,43 @@ async def sync_personal_accounts(
                     if item.due_at and not item.submitted:
                         due_at = item.due_at.astimezone(timezone.utc)
                         reminder_key = f"{item.id}:{due_at.isoformat()}"
-                        if 0 < (due_at - now).total_seconds() <= 86400 and reminder_key not in reminded:
-                            messages.append(format_deadline_reminder(item, 1440, settings.tz_info, now))
+                        remaining_minutes = (due_at - now).total_seconds() / 60
+                        thresholds = settings.deadline_reminder_minutes
+                        matching = [threshold for threshold in thresholds if 0 < remaining_minutes <= threshold]
+                        if matching and reminder_key not in reminded:
+                            messages.append(format_deadline_reminder(item, min(matching), settings.tz_info, now))
                             reminded.add(reminder_key)
 
-                for message in messages:
-                    for chunk in split_telegram_message(message):
-                        await bot.send_message(chat_id=user_id, text=chunk)
-                    result["sent"] += 1
-
+                pending = [chunk for message in messages for chunk in split_telegram_message(message)]
                 state.grades_json = json.dumps(grades)
                 state.assignments_json = json.dumps(assignments)
                 state.reminders_json = json.dumps(sorted(reminded))
+                state.pending_messages_json = json.dumps(pending)
                 state.last_checked_at = now
                 await session.commit()
+
+            while pending:
+                await bot.send_message(chat_id=user_id, text=pending[0])
+                pending.pop(0)
+                async with session_factory() as session:
+                    state = await session.get(PersonalSyncStateModel, user_id)
+                    if state is not None:
+                        state.pending_messages_json = json.dumps(pending)
+                        await session.commit()
+                result["sent"] += 1
+            async with session_factory() as session:
+                state = await session.get(PersonalSyncStateModel, user_id)
+                if state is not None:
+                    state.last_checked_at = now
+                    await session.commit()
                 result["updated"] += 1
         except (LMSError, UserSessionError) as exc:
             result["failed"] += 1
+            async with session_factory() as session:
+                state = await session.get(PersonalSyncStateModel, user_id)
+                if state is not None:
+                    state.last_checked_at = datetime.now(timezone.utc)
+                    await session.commit()
             logger.warning(
                 "Personal Moodle sync failed for user %s (%s)",
                 user_id,
@@ -156,6 +192,11 @@ async def sync_personal_accounts(
             )
         except Exception:
             result["failed"] += 1
+            async with session_factory() as session:
+                state = await session.get(PersonalSyncStateModel, user_id)
+                if state is not None:
+                    state.last_checked_at = datetime.now(timezone.utc)
+                    await session.commit()
             logger.exception("Unexpected personal sync failure for user %s", user_id)
 
     return result

@@ -54,6 +54,16 @@ async def _poll_loop(
         except Exception as exc:
             logger.warning("Student session keep-alive loop failed: %s", exc)
 
+        if bot is not None:
+            try:
+                from app.notifications.personal import sync_personal_accounts
+
+                stats = await sync_personal_accounts(settings, session_factory, bot)
+                if stats["failed"] or stats["accounts"]:
+                    logger.info("Personal account sync: %s", stats)
+            except Exception:
+                logger.exception("Personal account sync loop failed")
+
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
         except TimeoutError:
@@ -80,15 +90,18 @@ async def async_main(once: bool = False) -> int:
     notifier = TelegramNotifier(bot, settings.telegram_chat_id)
     sync_service = SyncService(settings, lms_client, session_factory, notifier)
 
+    api_task = None
+    uvicorn_server = None
     try:
         if once:
             report = await sync_service.sync_once(trigger="oneshot")
             await keep_alive_all_student_sessions(settings, session_factory, bot)
-            return 0 if report.ok else 1
+            from app.notifications.personal import sync_personal_accounts
+
+            personal = await sync_personal_accounts(settings, session_factory, bot)
+            return 0 if report.ok and personal["failed"] == 0 else 1
 
         # Start Connect API server on port 8000 for browser extension / auto-sync
-        api_task = None
-        uvicorn_server = None
         try:
             from fastapi import FastAPI
             from fastapi.middleware.cors import CORSMiddleware

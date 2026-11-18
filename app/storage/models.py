@@ -150,4 +150,5 @@ class PersonalSyncStateModel(Base):
     grades_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     assignments_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     reminders_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    pending_messages_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     last_checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
