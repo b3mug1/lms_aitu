@@ -15,7 +15,7 @@
 (function () {
   "use strict";
 
-  const API_BASE = "https://lmsaitu.vercel.app";
+  const API_BASE = "http://63.182.255.51:8000";
 
   function getMoodleCookie() {
     return new Promise((resolve) => {
