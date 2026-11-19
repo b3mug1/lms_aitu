@@ -1,0 +1,35 @@
+services:
+  bot:
+    build: .
+    container_name: moodle_bot
+    restart: always
+    env_file:
+      - .env
+    environment:
+      # Automatically drops any leftover Vercel webhook and runs long-polling 24/7
+      - TELEGRAM_DROP_WEBHOOK=true
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+
+  # Uncomment Caddy service below if you attach a domain and want automated HTTPS
+  # for the Chrome Extension (Connect API):
+  # caddy:
+  #   image: caddy:alpine
+  #   container_name: moodle_caddy
+  #   restart: always
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile
+  #     - caddy_data:/data
+  #     - caddy_config:/config
+  #   depends_on:
+  #     - bot
+
+# volumes:
+#   caddy_data:
+#   caddy_config:

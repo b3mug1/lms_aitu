@@ -1,0 +1,5 @@
+# Replace with your domain name (e.g. api.yourdomain.com) for automatic free SSL
+# Or leave :80 for plain HTTP reverse proxy
+:80 {
+    reverse_proxy bot:8000
+}

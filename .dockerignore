@@ -1,0 +1,15 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+tests
+.vercel
+dist
+*.egg-info
+.env
+.env.*
+data/*.db
+data/moodle_sso_profile

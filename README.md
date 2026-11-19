@@ -74,17 +74,47 @@
 .\.venv\Scripts\pytest.exe -v
 ```
 
-## Continuous SQLite run on Windows
+## Развертывание в AWS (Docker / Lightsail / EC2)
 
-The local process uses the SQLite database in `data/lms_notifier.db` and polls Moodle according to `POLL_INTERVAL_SECONDS` (300 seconds by default). Start it with:
+Проект подготовлен для работы в Docker-контейнере на виртуальном сервере (AWS Lightsail или EC2) в режиме 24/7 с подключением к облачной базе Neon PostgreSQL:
+
+1. **Создайте инстанс в AWS**:
+   - Рекомендуется **AWS Lightsail** (Ubuntu 24.04/22.04 LTS, план от $3.50/мес) или **EC2** (t4g.small / t3.micro).
+   - В Networking / Firewall откройте порт `22` (SSH), а также `8000` (или `80`/`443` при использовании Caddy reverse-proxy).
+
+2. **Клонируйте проект и настройте `.env`**:
+   ```bash
+   git clone <URL_РЕПОЗИТОРИЯ>
+   cd moodle_tg_notifier
+   cp .env.example .env
+   # Заполните TELEGRAM_BOT_TOKEN, DATABASE_URL (Neon PostgreSQL), MOODLE_COOKIE_ENCRYPTION_KEY и др.
+   ```
+
+3. **Запустите через Docker Compose**:
+   ```bash
+   chmod +x scripts/deploy_aws.sh
+   ./scripts/deploy_aws.sh
+   ```
+   Или вручную:
+   ```bash
+   docker compose up -d --build
+   ```
+
+4. **Логи и статус**:
+   ```bash
+   docker compose logs -f bot
+   docker compose ps
+   ```
+
+Бот работает непрерывно 24/7 в режиме Long Polling, сам выполняет опрос Moodle каждые 5 минут и продлевает студенческие сессии без необходимости во внешних Cron-сервисах.
+
+## Локальный запуск на Windows (SQLite)
+
+Локальный процесс использует SQLite в `data/lms_notifier.db` и опрашивает Moodle согласно `POLL_INTERVAL_SECONDS` (по умолчанию 300 сек):
 
 ```powershell
 .\.venv\Scripts\python.exe -m app.main
 ```
-
-Polling removes any Telegram webhook without dropping queued updates. Do not run the local poller and the Vercel webhook against the same bot token at the same time. To keep the bot available, Windows must remain powered on, awake, and connected to the internet. Configure the command in Windows Task Scheduler to start at user logon.
-
-Vercel's serverless functions require persistent PostgreSQL. Its local filesystem is not suitable for this SQLite database; use the local poller or another host with persistent disk when keeping SQLite.
 
 ## Personal Telegram accounts
 
@@ -101,6 +131,6 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 ```
 
 Keep this key private and back it up securely. Changing or losing it makes existing encrypted
-sessions unreadable; users will need to connect again. On Vercel, configure the key as a secret
-environment variable and use persistent PostgreSQL for account storage. Never ask users to send
+sessions unreadable; users will need to connect again. Configure the key in `.env`
+and use persistent PostgreSQL for account storage. Never ask users to send
 their cookie in a group chat.

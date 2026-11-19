@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import os
 import sys
 
 from aiogram import Bot, Dispatcher
@@ -70,7 +71,7 @@ async def _poll_loop(
             continue
 
 
-async def async_main(once: bool = False) -> int:
+async def async_main(once: bool = False, drop_webhook: bool = False) -> int:
     settings = Settings()  # type: ignore[call-arg]
     setup_logging(settings.log_level)
 
@@ -135,19 +136,25 @@ async def async_main(once: bool = False) -> int:
         dp.include_router(create_bot_router(settings, session_factory, sync_service))
         await bot.set_my_commands(BOT_COMMANDS)
 
+        should_drop_webhook = drop_webhook or os.environ.get("TELEGRAM_DROP_WEBHOOK", "").lower() in ("1", "true", "yes")
         webhook_info = await bot.get_webhook_info()
         if webhook_info.url:
-            logger.warning(
-                "Telegram webhook is active (%s). Skipping long polling to preserve webhook.",
-                webhook_info.url,
-            )
-            stop_event = asyncio.Event()
-            await _poll_loop(
-                settings, session_factory, sync_service, bot, settings.poll_interval_seconds, stop_event
-            )
-            return 0
-
-        await bot.delete_webhook(drop_pending_updates=False)
+            if should_drop_webhook:
+                logger.info("Dropping active webhook (%s) as requested to switch to polling", webhook_info.url)
+                await bot.delete_webhook(drop_pending_updates=False)
+            else:
+                logger.warning(
+                    "Telegram webhook is active (%s). Skipping long polling to preserve webhook. "
+                    "Set TELEGRAM_DROP_WEBHOOK=true or pass --drop-webhook to force polling mode.",
+                    webhook_info.url,
+                )
+                stop_event = asyncio.Event()
+                await _poll_loop(
+                    settings, session_factory, sync_service, bot, settings.poll_interval_seconds, stop_event
+                )
+                return 0
+        else:
+            await bot.delete_webhook(drop_pending_updates=False)
 
         stop_event = asyncio.Event()
         poller_task = asyncio.create_task(
@@ -186,9 +193,14 @@ def run() -> None:
         action="store_true",
         help="Run a single Moodle sync + notification pass and exit",
     )
+    parser.add_argument(
+        "--drop-webhook",
+        action="store_true",
+        help="Drop existing Telegram webhook and switch to long polling",
+    )
     args = parser.parse_args()
     try:
-        exit_code = asyncio.run(async_main(once=args.once))
+        exit_code = asyncio.run(async_main(once=args.once, drop_webhook=args.drop_webhook))
     except KeyboardInterrupt:
         exit_code = 0
     sys.exit(exit_code)
